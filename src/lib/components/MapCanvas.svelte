@@ -16,6 +16,7 @@
     contours,
     styles,
     showLabels,
+    loading,
     mapWidth = $bindable(),
     mapHeight = $bindable(),
   }: {
@@ -25,6 +26,7 @@
     contours: ContourFeature[] | null;
     styles: MapStyles;
     showLabels: boolean;
+    loading: boolean;
     mapWidth: number;
     mapHeight: number;
   } = $props();
@@ -347,6 +349,13 @@
   {:else}
     <div class="map-placeholder">Enter a location to draw the map.</div>
   {/if}
+
+  {#if loading}
+    <div class="loading-overlay" role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <span class="loading-text">Loading map…</span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -372,6 +381,44 @@
     align-items: center;
     justify-content: center;
     color: #888;
+  }
+
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(1px);
+    pointer-events: none;
+  }
+
+  .spinner {
+    width: 2.25rem;
+    height: 2.25rem;
+    border: 3px solid rgba(255, 62, 0, 0.25);
+    border-top-color: #ff3e00;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .loading-text {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation-duration: 2s; }
   }
 
   @media (max-width: 720px) {

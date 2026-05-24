@@ -215,6 +215,7 @@
     {contours}
     {styles}
     showLabels={appliedLabels}
+    loading={busy}
     bind:mapWidth
     bind:mapHeight
   />
