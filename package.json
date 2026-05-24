@@ -24,6 +24,7 @@
 		"vite": "^8.0.7"
 	},
 	"dependencies": {
+		"@sveltejs/adapter-static": "^3.0.10",
 		"@types/d3-contour": "^3.0.6",
 		"d3-contour": "^4.0.2",
 		"d3-geo": "^3.1.1",
