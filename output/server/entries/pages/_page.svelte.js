@@ -346,7 +346,7 @@ function SearchForm($$renderer, $$props) {
 //#region src/lib/components/MapCanvas.svelte
 function MapCanvas($$renderer, $$props) {
 	$$renderer.component(($$renderer) => {
-		let { bbox, boundary, features, contours, styles, showLabels, mapWidth = void 0, mapHeight = void 0 } = $$props;
+		let { bbox, boundary, features, contours, styles, showLabels, loading, mapWidth = void 0, mapHeight = void 0 } = $$props;
 		const fitFeature = derived(() => bbox ? bboxToCornersFeature(bbox) : null);
 		derived(() => {
 			if (!fitFeature() || mapWidth <= 0 || mapHeight <= 0) return null;
@@ -375,6 +375,11 @@ function MapCanvas($$renderer, $$props) {
 			$$renderer.push("<!--[-1-->");
 			$$renderer.push(`<div class="map-placeholder svelte-4tz69q">Enter a location to draw the map.</div>`);
 		}
+		$$renderer.push(`<!--]--> `);
+		if (loading) {
+			$$renderer.push("<!--[0-->");
+			$$renderer.push(`<div class="loading-overlay svelte-4tz69q" role="status" aria-live="polite"><div class="spinner svelte-4tz69q" aria-hidden="true"></div> <span class="loading-text svelte-4tz69q">Loading map…</span></div>`);
+		} else $$renderer.push("<!--[-1-->");
 		$$renderer.push(`<!--]--></div>`);
 		bind_props($$props, {
 			mapWidth,
@@ -517,6 +522,7 @@ function _page($$renderer, $$props) {
 				contours,
 				styles,
 				showLabels: appliedLabels,
+				loading: busy(),
 				get mapWidth() {
 					return mapWidth;
 				},
