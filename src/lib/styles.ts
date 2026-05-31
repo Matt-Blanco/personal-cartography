@@ -1,5 +1,31 @@
-export type FillStyle = { fill: string; stroke: string; lineWidth: number };
+export type FillMarkType = "dot" | "line" | "cross";
+
+export type FillMark = {
+  type: FillMarkType;
+  color: string;
+  spacing: number; // px between repeats
+  weight: number; // stroke width / dot radius
+  angle: number; // degrees (line/cross orientation; ignored for dot)
+};
+
+// `mark` absent/null ⇒ solid fill (the default). When set, the mark pattern
+// replaces the solid fill and the page background shows through.
+export type FillStyle = {
+  fill: string;
+  stroke: string;
+  lineWidth: number;
+  mark?: FillMark | null;
+};
+
 export type LineStyle = { stroke: string; lineWidth: number; dash?: number[] };
+
+export const DEFAULT_MARK: FillMark = {
+  type: "line",
+  color: "#888888",
+  spacing: 6,
+  weight: 0.7,
+  angle: 45,
+};
 
 export type RoadGroup = "major" | "through" | "local" | "path";
 

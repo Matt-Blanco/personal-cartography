@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { MapStyles } from "$lib/styles";
+  import { DEFAULT_MARK, type MapStyles, type FillStyle } from "$lib/styles";
   import type { LayerKey } from "$lib/layers";
 
   let {
@@ -15,7 +15,67 @@
     labelsVisible: boolean;
     boundaryVisible: boolean;
   } = $props();
+
+  function setFillMode(style: FillStyle, mode: string) {
+    style.mark =
+      mode === "mark" ? { ...DEFAULT_MARK, color: style.fill } : null;
+  }
 </script>
+
+{#snippet fillLayer(legend: string, style: FillStyle)}
+  <fieldset class="layers">
+    <legend>{legend}</legend>
+    <label class="color-row">
+      <span class="color-name">Fill style</span>
+      <select
+        value={style.mark ? "mark" : "color"}
+        onchange={(e) => setFillMode(style, e.currentTarget.value)}
+      >
+        <option value="color">Color</option>
+        <option value="mark">Mark</option>
+      </select>
+    </label>
+
+    {#if style.mark}
+      <label class="color-row">
+        <span class="color-name">Mark</span>
+        <select bind:value={style.mark.type}>
+          <option value="line">Lines</option>
+          <option value="cross">Crosses</option>
+          <option value="dot">Dots</option>
+        </select>
+      </label>
+      <label class="color-row">
+        <span class="color-name">Mark color</span>
+        <input type="color" bind:value={style.mark.color} />
+      </label>
+      <label class="color-row">
+        <span class="color-name">Spacing</span>
+        <input type="range" min="3" max="20" step="1" bind:value={style.mark.spacing} />
+      </label>
+      <label class="color-row">
+        <span class="color-name">Weight</span>
+        <input type="range" min="0.3" max="3" step="0.1" bind:value={style.mark.weight} />
+      </label>
+      {#if style.mark.type !== "dot"}
+        <label class="color-row">
+          <span class="color-name">Angle</span>
+          <input type="range" min="0" max="180" step="5" bind:value={style.mark.angle} />
+        </label>
+      {/if}
+    {:else}
+      <label class="color-row">
+        <span class="color-name">Fill</span>
+        <input type="color" bind:value={style.fill} />
+      </label>
+    {/if}
+
+    <label class="color-row">
+      <span class="color-name">Stroke</span>
+      <input type="color" bind:value={style.stroke} />
+    </label>
+  </fieldset>
+{/snippet}
 
 <div class="edit-panel">
   <fieldset class="layers">
@@ -27,59 +87,19 @@
   </fieldset>
 
   {#if boundaryVisible}
-    <fieldset class="layers">
-      <legend>Boundary</legend>
-      <label class="color-row">
-        <span class="color-name">Fill</span>
-        <input type="color" bind:value={styles.boundary.fill} />
-      </label>
-      <label class="color-row">
-        <span class="color-name">Stroke</span>
-        <input type="color" bind:value={styles.boundary.stroke} />
-      </label>
-    </fieldset>
+    {@render fillLayer("Boundary", styles.boundary)}
   {/if}
 
   {#if appliedLayers.green}
-    <fieldset class="layers">
-      <legend>Parks &amp; green</legend>
-      <label class="color-row">
-        <span class="color-name">Fill</span>
-        <input type="color" bind:value={styles.green.fill} />
-      </label>
-      <label class="color-row">
-        <span class="color-name">Stroke</span>
-        <input type="color" bind:value={styles.green.stroke} />
-      </label>
-    </fieldset>
+    {@render fillLayer("Parks & green", styles.green)}
   {/if}
 
   {#if appliedLayers.water}
-    <fieldset class="layers">
-      <legend>Water</legend>
-      <label class="color-row">
-        <span class="color-name">Fill</span>
-        <input type="color" bind:value={styles.water.fill} />
-      </label>
-      <label class="color-row">
-        <span class="color-name">Stroke</span>
-        <input type="color" bind:value={styles.water.stroke} />
-      </label>
-    </fieldset>
+    {@render fillLayer("Water", styles.water)}
   {/if}
 
   {#if appliedLayers.buildings}
-    <fieldset class="layers">
-      <legend>Buildings</legend>
-      <label class="color-row">
-        <span class="color-name">Fill</span>
-        <input type="color" bind:value={styles.buildings.fill} />
-      </label>
-      <label class="color-row">
-        <span class="color-name">Stroke</span>
-        <input type="color" bind:value={styles.buildings.stroke} />
-      </label>
-    </fieldset>
+    {@render fillLayer("Buildings", styles.buildings)}
   {/if}
 
   {#if appliedLayers.roads}
@@ -194,6 +214,22 @@
   .color-row input[type="color"]::-webkit-color-swatch {
     border: none;
     border-radius: 0.2rem;
+  }
+
+  .color-row select {
+    grid-column: 2 / 4;
+    font-size: 0.85rem;
+    padding: 0.2rem 0.3rem;
+    border: 1px solid #ccc;
+    border-radius: 0.3rem;
+    background: white;
+    cursor: pointer;
+  }
+
+  .color-row input[type="range"] {
+    grid-column: 2 / 4;
+    width: 100%;
+    cursor: pointer;
   }
 
   .color-name {

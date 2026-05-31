@@ -4,7 +4,12 @@
   import { bboxToCornersFeature, type Bbox } from "$lib/geocode";
   import { classify, type LayerKey } from "$lib/layers";
   import type { ContourFeature } from "$lib/contours";
-  import { roadStyleFor, type MapStyles, type FillStyle, type LineStyle } from "$lib/styles";
+  import {
+    roadStyleFor,
+    type MapStyles,
+    type FillStyle,
+    type FillMark,
+  } from "$lib/styles";
 
   // Flag to show all avaialble labels, otherwise only road labels will be displayed.
   const showAllLabels = false;
@@ -56,46 +61,161 @@
     return out;
   });
 
-  function drawFillBatch(
-    ctx: CanvasRenderingContext2D,
-    pathFn: ReturnType<typeof geoPath>,
-    feats: Feature<GeometryObject>[],
-    style: FillStyle,
-  ) {
-    if (feats.length === 0) return;
-    ctx.beginPath();
-    for (const f of feats) pathFn(f);
-    ctx.fillStyle = style.fill;
-    ctx.fill();
-    ctx.strokeStyle = style.stroke;
-    ctx.lineWidth = style.lineWidth;
-    ctx.stroke();
-  }
+  type Pt = [number, number];
 
-  function drawLineBatch(
-    ctx: CanvasRenderingContext2D,
-    pathFn: ReturnType<typeof geoPath>,
-    feats: Feature<GeometryObject>[],
-    style: LineStyle,
-  ) {
-    if (feats.length === 0) return;
-    ctx.beginPath();
-    for (const f of feats) pathFn(f);
-    ctx.strokeStyle = style.stroke;
-    ctx.lineWidth = style.lineWidth;
-    ctx.setLineDash(style.dash ?? []);
-    ctx.stroke();
-  }
+  type PlacedLabel = {
+    name: string;
+    x: number;
+    y: number;
+    angle: number;
+    font: string;
+  };
 
+  type Scene = {
+    boundary: Path2D | null;
+    contours: Path2D | null;
+    green: Path2D;
+    water: Path2D;
+    buildings: Path2D;
+    roads: { hw: string; path: Path2D }[];
+    rail: Path2D;
+    labels: PlacedLabel[];
+  };
+
+  // Projection-space geometry, baked once into Path2D objects (plus the label
+  // layout, which is the other expensive step). This recomputes only when the
+  // map data or projection changes — never when colors change — so edits in the
+  // Edit panel skip reprojection/relayout and just re-fill the cached paths.
+  const scene = $derived.by<Scene | null>(() => {
+    const proj = projection;
+    if (!proj || mapWidth <= 0 || mapHeight <= 0) return null;
+    const path = geoPath(proj);
+
+    const buildPath = (feats: Feature<GeometryObject>[]) => {
+      const p = new Path2D();
+      for (const f of feats) {
+        const d = path(f);
+        if (d) p.addPath(new Path2D(d));
+      }
+      return p;
+    };
+
+    let boundaryPath: Path2D | null = null;
+    if (
+      boundary &&
+      (boundary.geometry.type === "Polygon" ||
+        boundary.geometry.type === "MultiPolygon")
+    ) {
+      const d = path(boundary);
+      if (d) boundaryPath = new Path2D(d);
+    }
+
+    const contoursPath =
+      contours && contours.length > 0 ? buildPath(contours) : null;
+
+    const roadGroups: Record<string, Feature<GeometryObject>[]> = {};
+    for (const f of featuresByLayer.roads) {
+      const hw = (f.properties as { highway?: string })?.highway ?? "other";
+      (roadGroups[hw] ??= []).push(f);
+    }
+    const roads = Object.entries(roadGroups).map(([hw, feats]) => ({
+      hw,
+      path: buildPath(feats),
+    }));
+
+    return {
+      boundary: boundaryPath,
+      contours: contoursPath,
+      green: buildPath(featuresByLayer.green),
+      water: buildPath(featuresByLayer.water),
+      buildings: buildPath(featuresByLayer.buildings),
+      roads,
+      rail: buildPath(featuresByLayer.rail),
+      labels: showLabels ? layoutLabels(path) : [],
+    };
+  });
+
+  // Coalesce repaints into a single animation frame. A color-picker drag emits a
+  // burst of `input` events; without this each one forces a synchronous full
+  // canvas redraw. `$state.snapshot` deeply reads `styles`, registering every
+  // nested color/width as a dependency while also handing the draw a plain copy.
   $effect(() => {
-    if (!canvas || !projection || mapWidth <= 0 || mapHeight <= 0) return;
-    void features;
-    void boundary;
-    void featuresByLayer;
-    void contours;
-    void styles;
-    void showLabels;
+    const s = scene;
+    const snap = $state.snapshot(styles) as MapStyles;
+    if (!canvas || !s) return;
+    const id = requestAnimationFrame(() => drawScene(s, snap));
+    return () => cancelAnimationFrame(id);
+  });
 
+  // Build a repeating tile for a fill mark. Drawn at device-pixel resolution so
+  // marks stay crisp on retina; the returned pattern is rotated for line/cross.
+  function makeMarkPattern(
+    ctx: CanvasRenderingContext2D,
+    mark: FillMark,
+    dpr: number,
+  ): CanvasPattern | null {
+    const spacing = Math.max(2, mark.spacing);
+    const tile = document.createElement("canvas");
+    tile.width = Math.round(spacing * dpr);
+    tile.height = Math.round(spacing * dpr);
+    const t = tile.getContext("2d");
+    if (!t) return null;
+    t.scale(dpr, dpr);
+    t.strokeStyle = mark.color;
+    t.fillStyle = mark.color;
+    t.lineWidth = mark.weight;
+    t.lineCap = "round";
+
+    if (mark.type === "dot") {
+      t.beginPath();
+      t.arc(spacing / 2, spacing / 2, Math.max(0.3, mark.weight), 0, Math.PI * 2);
+      t.fill();
+    } else {
+      // A horizontal midline tiles seamlessly into parallel lines; the pattern
+      // transform rotates the whole lattice. "cross" adds the perpendicular set.
+      t.beginPath();
+      t.moveTo(0, spacing / 2);
+      t.lineTo(spacing, spacing / 2);
+      if (mark.type === "cross") {
+        t.moveTo(spacing / 2, 0);
+        t.lineTo(spacing / 2, spacing);
+      }
+      t.stroke();
+    }
+
+    const pat = ctx.createPattern(tile, "repeat");
+    if (!pat) return null;
+    // Undo the dpr baked into the tile, then rotate. createPattern coordinates
+    // are in the untransformed canvas space, so scale back down by dpr.
+    const m = new DOMMatrix().scaleSelf(1 / dpr);
+    if (mark.type !== "dot") m.rotateSelf(mark.angle);
+    pat.setTransform(m);
+    return pat;
+  }
+
+  function fillStroke(
+    ctx: CanvasRenderingContext2D,
+    path: Path2D,
+    style: FillStyle,
+    dpr: number,
+  ) {
+    if (style.mark) {
+      const pat = makeMarkPattern(ctx, style.mark, dpr);
+      if (pat) {
+        ctx.fillStyle = pat;
+        ctx.fill(path);
+      }
+    } else {
+      ctx.fillStyle = style.fill;
+      ctx.fill(path);
+    }
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.lineWidth;
+    ctx.stroke(path);
+  }
+
+  function drawScene(s: Scene, st: MapStyles) {
+    if (!canvas) return;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = mapWidth * dpr;
     canvas.height = mapHeight * dpr;
@@ -104,60 +224,52 @@
     if (!ctx) return;
     ctx.scale(dpr, dpr);
 
-    ctx.fillStyle = styles.background;
+    ctx.fillStyle = st.background;
     ctx.fillRect(0, 0, mapWidth, mapHeight);
 
-    const pathFn = geoPath(projection, ctx);
     ctx.lineJoin = "round";
     ctx.lineCap = "butt";
 
-    if (
-      boundary &&
-      (boundary.geometry.type === "Polygon" ||
-        boundary.geometry.type === "MultiPolygon")
-    ) {
-      ctx.beginPath();
-      pathFn(boundary);
-      ctx.fillStyle = styles.boundary.fill;
-      ctx.fill();
-      ctx.strokeStyle = styles.boundary.stroke;
-      ctx.lineWidth = styles.boundary.lineWidth;
-      ctx.stroke();
+    if (s.boundary) {
+      fillStroke(ctx, s.boundary, st.boundary, dpr);
     }
 
-    if (contours && contours.length > 0) {
-      ctx.lineCap = "butt";
-      drawLineBatch(ctx, pathFn, contours, {
-        stroke: styles.contour,
-        lineWidth: 0.5,
-      });
+    if (s.contours) {
+      ctx.setLineDash([]);
+      ctx.strokeStyle = st.contour;
+      ctx.lineWidth = 0.5;
+      ctx.stroke(s.contours);
     }
 
-    drawFillBatch(ctx, pathFn, featuresByLayer.green, styles.green);
-    drawFillBatch(ctx, pathFn, featuresByLayer.water, styles.water);
-    drawFillBatch(ctx, pathFn, featuresByLayer.buildings, styles.buildings);
+    fillStroke(ctx, s.green, st.green, dpr);
+    fillStroke(ctx, s.water, st.water, dpr);
+    fillStroke(ctx, s.buildings, st.buildings, dpr);
 
     ctx.lineCap = "round";
-    const roadGroups: Record<string, Feature<GeometryObject>[]> = {};
-    for (const f of featuresByLayer.roads) {
-      const hw = (f.properties as { highway?: string })?.highway ?? "other";
-      (roadGroups[hw] ??= []).push(f);
-    }
-    for (const [hw, feats] of Object.entries(roadGroups)) {
-      drawLineBatch(ctx, pathFn, feats, roadStyleFor(hw, styles.roads));
+    ctx.setLineDash([]);
+    for (const r of s.roads) {
+      const rs = roadStyleFor(r.hw, st.roads);
+      ctx.strokeStyle = rs.stroke;
+      ctx.lineWidth = rs.lineWidth;
+      ctx.stroke(r.path);
     }
 
-    drawLineBatch(ctx, pathFn, featuresByLayer.rail, {
-      stroke: styles.rail,
-      lineWidth: 1,
-      dash: [4, 3],
-    });
+    ctx.strokeStyle = st.rail;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.stroke(s.rail);
     ctx.setLineDash([]);
 
-    if (showLabels) drawLabels(ctx, pathFn);
-  });
+    if (s.labels.length > 0) drawLabels(ctx, s.labels, st.label);
+  }
 
-  type Pt = [number, number];
+  let measureCtx: CanvasRenderingContext2D | null = null;
+  function getMeasureCtx(): CanvasRenderingContext2D | null {
+    if (!measureCtx) {
+      measureCtx = document.createElement("canvas").getContext("2d");
+    }
+    return measureCtx;
+  }
 
   function projectLine(coords: Pt[]): Pt[] {
     if (!projection) return [];
@@ -257,22 +369,19 @@
     return { x: c[0], y: c[1], angle };
   }
 
-  function drawLabels(
-    ctx: CanvasRenderingContext2D,
+  // Color-independent: decides which labels survive overlap resolution and
+  // where/how they sit. Measurement uses a detached context so layout can run
+  // outside the paint, and the result is cached on the scene.
+  function layoutLabels(
     pathFn: ReturnType<typeof geoPath>,
-  ) {
-    if (!features) return;
+  ): PlacedLabel[] {
+    if (!features) return [];
+    const mctx = getMeasureCtx();
+    if (!mctx) return [];
 
     type Placed = { x: number; y: number; w: number; h: number };
     const placed: Placed[] = [];
     const seenRoadName = new Set<string>();
-
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.lineJoin = "round";
-    ctx.miterLimit = 2;
-    ctx.strokeStyle = styles.label.halo;
-    ctx.fillStyle = styles.label.fill;
 
     const roadFont = '500 10px "Fira Mono", ui-monospace, monospace';
     const areaFont = '600 11px system-ui, sans-serif';
@@ -310,10 +419,11 @@
 
     items.sort((a, b) => (a.isRoad === b.isRoad ? 0 : a.isRoad ? 1 : -1));
 
+    const result: PlacedLabel[] = [];
     for (const it of items) {
-      ctx.font = it.isRoad ? roadFont : areaFont;
-      const m = ctx.measureText(it.name);
-      const w = m.width;
+      const font = it.isRoad ? roadFont : areaFont;
+      mctx.font = font;
+      const w = mctx.measureText(it.name).width;
       const h = it.isRoad ? 10 : 11;
       if (it.isRoad && it.length < w * 0.75) continue;
       const cos = Math.abs(Math.cos(it.angle));
@@ -326,14 +436,33 @@
           Math.abs(p.y - it.y) < (p.h + bh) / 2 + 2,
       );
       if (overlap) continue;
+      result.push({ name: it.name, x: it.x, y: it.y, angle: it.angle, font });
+      placed.push({ x: it.x, y: it.y, w: bw, h: bh });
+    }
+    return result;
+  }
+
+  function drawLabels(
+    ctx: CanvasRenderingContext2D,
+    labels: PlacedLabel[],
+    style: MapStyles["label"],
+  ) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.miterLimit = 2;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = style.halo;
+    ctx.fillStyle = style.fill;
+
+    for (const it of labels) {
+      ctx.font = it.font;
       ctx.save();
       ctx.translate(it.x, it.y);
       ctx.rotate(it.angle);
-      ctx.lineWidth = 3;
       ctx.strokeText(it.name, 0, 0);
       ctx.fillText(it.name, 0, 0);
       ctx.restore();
-      placed.push({ x: it.x, y: it.y, w: bw, h: bh });
     }
   }
 </script>
