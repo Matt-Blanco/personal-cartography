@@ -60,6 +60,10 @@
   // Styling state — passed to MapCanvas and EditPanel
   let styles = $state<MapStyles>(structuredClone(DEFAULT_STYLES));
 
+  // Bound to MapCanvas so the Edit panel's Print button can trigger a
+  // per-layer printout.
+  let mapCanvas = $state<{ printLayers: () => void } | null>(null);
+
   let currentRequest: AbortController | null = null;
 
   const busy = $derived(status === "geocoding" || status === "fetching");
@@ -184,6 +188,7 @@
           contoursVisible={appliedContours}
           labelsVisible={appliedLabels}
           {boundaryVisible}
+          onPrint={() => mapCanvas?.printLayers()}
         />
       {/if}
     </div>
@@ -209,6 +214,7 @@
   </aside>
 
   <MapCanvas
+    bind:this={mapCanvas}
     {bbox}
     {boundary}
     {features}

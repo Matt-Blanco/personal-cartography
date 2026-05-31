@@ -36,7 +36,44 @@
     mapHeight: number;
   } = $props();
 
-  let canvas = $state<HTMLCanvasElement | null>(null);
+  // Each map layer renders onto its own stacked <canvas>, in this paint order
+  // (earlier = underneath). Keeping layers physically separate lets the print
+  // action emit one page per layer without re-deriving any geometry.
+  type LayerId =
+    | "boundary"
+    | "contours"
+    | "green"
+    | "water"
+    | "buildings"
+    | "roads"
+    | "rail"
+    | "labels";
+
+  const LAYER_ORDER: LayerId[] = [
+    "boundary",
+    "contours",
+    "green",
+    "water",
+    "buildings",
+    "roads",
+    "rail",
+    "labels",
+  ];
+
+  const LAYER_LABELS: Record<LayerId, string> = {
+    boundary: "Boundary",
+    contours: "Contours",
+    green: "Parks & green",
+    water: "Water",
+    buildings: "Buildings",
+    roads: "Roads",
+    rail: "Rail",
+    labels: "Labels",
+  };
+
+  // Plain (non-reactive) ref map populated by `bind:this`; read inside the
+  // repaint frame, after the DOM has settled.
+  const layerCanvases: Partial<Record<LayerId, HTMLCanvasElement | null>> = {};
 
   const fitFeature = $derived(bbox ? bboxToCornersFeature(bbox) : null);
 
@@ -135,6 +172,33 @@
     };
   });
 
+  // A layer is "visible" when it actually has something to draw — drives both
+  // which canvases mount on screen and which pages the print action emits.
+  function layerHasContent(id: LayerId, s: Scene): boolean {
+    switch (id) {
+      case "boundary":
+        return !!s.boundary;
+      case "contours":
+        return !!s.contours;
+      case "green":
+        return featuresByLayer.green.length > 0;
+      case "water":
+        return featuresByLayer.water.length > 0;
+      case "buildings":
+        return featuresByLayer.buildings.length > 0;
+      case "roads":
+        return s.roads.length > 0;
+      case "rail":
+        return featuresByLayer.rail.length > 0;
+      case "labels":
+        return s.labels.length > 0;
+    }
+  }
+
+  const visibleLayers = $derived.by<LayerId[]>(() =>
+    scene ? LAYER_ORDER.filter((id) => layerHasContent(id, scene)) : [],
+  );
+
   // Coalesce repaints into a single animation frame. A color-picker drag emits a
   // burst of `input` events; without this each one forces a synchronous full
   // canvas redraw. `$state.snapshot` deeply reads `styles`, registering every
@@ -142,8 +206,21 @@
   $effect(() => {
     const s = scene;
     const snap = $state.snapshot(styles) as MapStyles;
-    if (!canvas || !s) return;
-    const id = requestAnimationFrame(() => drawScene(s, snap));
+    const layers = visibleLayers;
+    if (!s) return;
+    const id = requestAnimationFrame(() => {
+      const dpr = window.devicePixelRatio || 1;
+      for (const lid of layers) {
+        const c = layerCanvases[lid];
+        if (!c) continue;
+        c.width = mapWidth * dpr;
+        c.height = mapHeight * dpr;
+        const ctx = c.getContext("2d");
+        if (!ctx) continue;
+        ctx.scale(dpr, dpr);
+        drawLayer(lid, ctx, s, snap, dpr);
+      }
+    });
     return () => cancelAnimationFrame(id);
   });
 
@@ -214,53 +291,201 @@
     ctx.stroke(path);
   }
 
-  function drawScene(s: Scene, st: MapStyles) {
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = mapWidth * dpr;
-    canvas.height = mapHeight * dpr;
+  // Draw a single layer onto a fresh context. Each canvas starts transparent
+  // (the page background shows through the `.map` element), so every layer sets
+  // its own context state rather than inheriting it from a previous layer.
+  function drawLayer(
+    id: LayerId,
+    ctx: CanvasRenderingContext2D,
+    s: Scene,
+    st: MapStyles,
+    dpr: number,
+  ) {
+    switch (id) {
+      case "boundary":
+        if (!s.boundary) return;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "butt";
+        ctx.setLineDash([]);
+        fillStroke(ctx, s.boundary, st.boundary, dpr);
+        return;
+      case "contours":
+        if (!s.contours) return;
+        ctx.setLineDash([]);
+        ctx.strokeStyle = st.contour;
+        ctx.lineWidth = 0.5;
+        ctx.stroke(s.contours);
+        return;
+      case "green":
+      case "water":
+      case "buildings":
+        ctx.lineJoin = "round";
+        ctx.lineCap = "butt";
+        ctx.setLineDash([]);
+        fillStroke(ctx, s[id], st[id], dpr);
+        return;
+      case "roads":
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        ctx.setLineDash([]);
+        for (const r of s.roads) {
+          const rs = roadStyleFor(r.hw, st.roads);
+          ctx.strokeStyle = rs.stroke;
+          ctx.lineWidth = rs.lineWidth;
+          ctx.stroke(r.path);
+        }
+        return;
+      case "rail":
+        ctx.lineCap = "butt";
+        ctx.strokeStyle = st.rail;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.stroke(s.rail);
+        ctx.setLineDash([]);
+        return;
+      case "labels":
+        if (s.labels.length > 0) drawLabels(ctx, s.labels, st.label);
+        return;
+    }
+  }
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.scale(dpr, dpr);
+  // Width of the slug/bleed margin (map-space px) drawn around every print page.
+  // Registration + crop marks live here; the content box sits inset by this.
+  const PRINT_MARGIN = 28;
 
-    ctx.fillStyle = st.background;
-    ctx.fillRect(0, 0, mapWidth, mapHeight);
-
-    ctx.lineJoin = "round";
+  // Crop marks at the trim corners and registration targets at the edge
+  // midpoints. Identical on every page (same dimensions, margin, and scale), so
+  // stacking the printouts lets each layer be aligned against the others.
+  function drawPrintMarks(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    margin: number,
+  ) {
+    ctx.save();
+    ctx.setLineDash([]);
     ctx.lineCap = "butt";
+    ctx.lineJoin = "miter";
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 0.5;
 
-    if (s.boundary) {
-      fillStroke(ctx, s.boundary, st.boundary, dpr);
+    const gap = 6;
+    const len = margin - gap - 4;
+    const corner = (x: number, y: number, dx: number, dy: number) => {
+      ctx.beginPath();
+      ctx.moveTo(x + dx * gap, y);
+      ctx.lineTo(x + dx * (gap + len), y);
+      ctx.moveTo(x, y + dy * gap);
+      ctx.lineTo(x, y + dy * (gap + len));
+      ctx.stroke();
+    };
+    corner(0, 0, -1, -1);
+    corner(w, 0, 1, -1);
+    corner(0, h, -1, 1);
+    corner(w, h, 1, 1);
+
+    // Temporary: Hide slug targets since graphically they clutter the map
+    // const r = 5;
+    // const ext = r * 1.7;
+    // const target = (cx: number, cy: number) => {
+    //   ctx.beginPath();
+    //   ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    //   ctx.stroke();
+    //   ctx.beginPath();
+    //   ctx.moveTo(cx - ext, cy);
+    //   ctx.lineTo(cx + ext, cy);
+    //   ctx.moveTo(cx, cy - ext);
+    //   ctx.lineTo(cx, cy + ext);
+    //   ctx.stroke();
+    // };
+    // const m = margin / 2;
+    // target(w / 2, -m);
+    // target(w / 2, h + m);
+    // target(-m, h / 2);
+    // target(w + m, h / 2);
+
+    ctx.restore();
+  }
+
+  // Render every visible layer to its own page and hand it to the browser's
+  // print dialog. Layers are redrawn at a higher scale (the cached Path2D paths
+  // are resolution-independent) so the output stays crisp on paper, inset inside
+  // a slug/bleed margin carrying the alignment marks.
+  export function printLayers() {
+    const s = scene;
+    if (!s) return;
+    const layers = visibleLayers;
+    if (layers.length === 0 || mapWidth <= 0 || mapHeight <= 0) return;
+    const st = $state.snapshot(styles) as MapStyles;
+    const scale = Math.max(2, Math.ceil((window.devicePixelRatio || 1) * 2));
+    const margin = PRINT_MARGIN;
+
+    const pages: { label: string; url: string }[] = [];
+    for (const lid of layers) {
+      const c = document.createElement("canvas");
+      c.width = Math.round((mapWidth + margin * 2) * scale);
+      c.height = Math.round((mapHeight + margin * 2) * scale);
+      const ctx = c.getContext("2d");
+      if (!ctx) continue;
+      ctx.scale(scale, scale);
+      ctx.translate(margin, margin);
+      drawLayer(lid, ctx, s, st, scale);
+      drawPrintMarks(ctx, mapWidth, mapHeight, margin);
+      pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png") });
     }
+    openPrintWindow(pages);
+  }
 
-    if (s.contours) {
-      ctx.setLineDash([]);
-      ctx.strokeStyle = st.contour;
-      ctx.lineWidth = 0.5;
-      ctx.stroke(s.contours);
+  function openPrintWindow(pages: { label: string; url: string }[]) {
+    if (pages.length === 0) return;
+    const win = window.open("", "_blank");
+    if (!win) return;
+
+    const body = pages
+      .map(
+        (p) =>
+          `<section class="page"><h2>${p.label}</h2><img src="${p.url}" alt="${p.label}" /></section>`,
+      )
+      .join("");
+
+    win.document.write(
+      `<!doctype html><html><head><title>Map layers</title><meta charset="utf-8" /><style>
+        @page { margin: 1.5cm; }
+        html, body { margin: 0; padding: 0; }
+        .page {
+          page-break-after: always;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 92vh;
+        }
+        .page:last-child { page-break-after: auto; }
+        h2 {
+          font: 600 13px system-ui, sans-serif;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: #555;
+          margin: 0 0 1rem;
+        }
+        img { max-width: 100%; max-height: 84vh; object-fit: contain; }
+      </style></head><body>${body}</body></html>`,
+    );
+    win.document.close();
+
+    const imgs = Array.from(win.document.images);
+    let remaining = imgs.length;
+    const done = () => {
+      if (--remaining <= 0) win.print();
+    };
+    if (remaining === 0) {
+      win.print();
+      return;
     }
-
-    fillStroke(ctx, s.green, st.green, dpr);
-    fillStroke(ctx, s.water, st.water, dpr);
-    fillStroke(ctx, s.buildings, st.buildings, dpr);
-
-    ctx.lineCap = "round";
-    ctx.setLineDash([]);
-    for (const r of s.roads) {
-      const rs = roadStyleFor(r.hw, st.roads);
-      ctx.strokeStyle = rs.stroke;
-      ctx.lineWidth = rs.lineWidth;
-      ctx.stroke(r.path);
+    for (const img of imgs) {
+      if (img.complete) done();
+      else img.onload = img.onerror = done;
     }
-
-    ctx.strokeStyle = st.rail;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 3]);
-    ctx.stroke(s.rail);
-    ctx.setLineDash([]);
-
-    if (s.labels.length > 0) drawLabels(ctx, s.labels, st.label);
   }
 
   let measureCtx: CanvasRenderingContext2D | null = null;
@@ -474,7 +699,9 @@
   style:background={styles.background}
 >
   {#if bbox}
-    <canvas bind:this={canvas}></canvas>
+    {#each visibleLayers as id (id)}
+      <canvas bind:this={layerCanvases[id]} data-layer={id}></canvas>
+    {/each}
   {:else}
     <div class="map-placeholder">Enter a location to draw the map.</div>
   {/if}

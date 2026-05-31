@@ -8,12 +8,14 @@
     contoursVisible,
     labelsVisible,
     boundaryVisible,
+    onPrint,
   }: {
     styles: MapStyles;
     appliedLayers: Record<LayerKey, boolean>;
     contoursVisible: boolean;
     labelsVisible: boolean;
     boundaryVisible: boolean;
+    onPrint: () => void;
   } = $props();
 
   function setFillMode(style: FillStyle, mode: string) {
@@ -161,6 +163,10 @@
       </label>
     </fieldset>
   {/if}
+
+  <button type="button" class="print-btn" onclick={onPrint}>
+    Print layers
+  </button>
 </div>
 
 <style>
@@ -230,6 +236,24 @@
     grid-column: 2 / 4;
     width: 100%;
     cursor: pointer;
+  }
+
+  .print-btn {
+    margin-top: 0.25rem;
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: white;
+    background: #ff3e00;
+    border: none;
+    border-radius: 0.3rem;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .print-btn:hover {
+    background: #e63800;
   }
 
   .color-name {
