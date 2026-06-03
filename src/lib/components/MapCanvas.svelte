@@ -24,6 +24,7 @@
     loading,
     mapWidth = $bindable(),
     mapHeight = $bindable(),
+    displayName
   }: {
     bbox: Bbox | null;
     boundary: Feature<GeometryObject> | null;
@@ -34,6 +35,7 @@
     loading: boolean;
     mapWidth: number;
     mapHeight: number;
+    displayName: string | null;
   } = $props();
 
   // Each map layer renders onto its own stacked <canvas>, in this paint order
@@ -245,7 +247,13 @@
 
     if (mark.type === "dot") {
       t.beginPath();
-      t.arc(spacing / 2, spacing / 2, Math.max(0.3, mark.weight), 0, Math.PI * 2);
+      t.arc(
+        spacing / 2,
+        spacing / 2,
+        Math.max(0.3, mark.weight),
+        0,
+        Math.PI * 2,
+      );
       t.fill();
     } else {
       // A horizontal midline tiles seamlessly into parallel lines; the pattern
@@ -300,6 +308,8 @@
     s: Scene,
     st: MapStyles,
     dpr: number,
+    address?: string | null,
+
   ) {
     switch (id) {
       case "boundary":
@@ -420,7 +430,7 @@
     const scale = Math.max(2, Math.ceil((window.devicePixelRatio || 1) * 2));
     const margin = PRINT_MARGIN;
 
-    const pages: { label: string; url: string }[] = [];
+    const pages: { label: string; url: string, location: string }[] = [];
     for (const lid of layers) {
       const c = document.createElement("canvas");
       c.width = Math.round((mapWidth + margin * 2) * scale);
@@ -431,61 +441,9 @@
       ctx.translate(margin, margin);
       drawLayer(lid, ctx, s, st, scale);
       drawPrintMarks(ctx, mapWidth, mapHeight, margin);
-      pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png") });
+      pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png"), location: displayName ?? "" });
     }
     openPrintWindow(pages);
-  }
-
-  function openPrintWindow(pages: { label: string; url: string }[]) {
-    if (pages.length === 0) return;
-    const win = window.open("", "_blank");
-    if (!win) return;
-
-    const body = pages
-      .map(
-        (p) =>
-          `<section class="page"><h2>${p.label}</h2><img src="${p.url}" alt="${p.label}" /></section>`,
-      )
-      .join("");
-
-    win.document.write(
-      `<!doctype html><html><head><title>Map layers</title><meta charset="utf-8" /><style>
-        @page { margin: 1.5cm; }
-        html, body { margin: 0; padding: 0; }
-        .page {
-          page-break-after: always;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          min-height: 92vh;
-        }
-        .page:last-child { page-break-after: auto; }
-        h2 {
-          font: 600 13px system-ui, sans-serif;
-          text-transform: uppercase;
-          letter-spacing: 0.06em;
-          color: #555;
-          margin: 0 0 1rem;
-        }
-        img { max-width: 100%; max-height: 84vh; object-fit: contain; }
-      </style></head><body>${body}</body></html>`,
-    );
-    win.document.close();
-
-    const imgs = Array.from(win.document.images);
-    let remaining = imgs.length;
-    const done = () => {
-      if (--remaining <= 0) win.print();
-    };
-    if (remaining === 0) {
-      win.print();
-      return;
-    }
-    for (const img of imgs) {
-      if (img.complete) done();
-      else img.onload = img.onerror = done;
-    }
   }
 
   let measureCtx: CanvasRenderingContext2D | null = null;
@@ -501,7 +459,8 @@
     const out: Pt[] = [];
     for (const c of coords) {
       const p = projection(c);
-      if (p && Number.isFinite(p[0]) && Number.isFinite(p[1])) out.push([p[0], p[1]]);
+      if (p && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+        out.push([p[0], p[1]]);
     }
     return out;
   }
@@ -524,7 +483,10 @@
     const t = (half - lens[i - 1]) / segLen;
     const x = pts[i - 1][0] + t * (pts[i][0] - pts[i - 1][0]);
     const y = pts[i - 1][1] + t * (pts[i][1] - pts[i - 1][1]);
-    let angle = Math.atan2(pts[i][1] - pts[i - 1][1], pts[i][0] - pts[i - 1][0]);
+    let angle = Math.atan2(
+      pts[i][1] - pts[i - 1][1],
+      pts[i][0] - pts[i - 1][0],
+    );
     if (angle > Math.PI / 2) angle -= Math.PI;
     else if (angle < -Math.PI / 2) angle += Math.PI;
     return { x, y, angle, length: total };
@@ -532,13 +494,23 @@
 
   function principalAngle(pts: Pt[]): number {
     if (pts.length < 2) return 0;
-    let sx = 0, sy = 0;
-    for (const [x, y] of pts) { sx += x; sy += y; }
-    const cx = sx / pts.length, cy = sy / pts.length;
-    let sxx = 0, syy = 0, sxy = 0;
+    let sx = 0,
+      sy = 0;
     for (const [x, y] of pts) {
-      const dx = x - cx, dy = y - cy;
-      sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+      sx += x;
+      sy += y;
+    }
+    const cx = sx / pts.length,
+      cy = sy / pts.length;
+    let sxx = 0,
+      syy = 0,
+      sxy = 0;
+    for (const [x, y] of pts) {
+      const dx = x - cx,
+        dy = y - cy;
+      sxx += dx * dx;
+      syy += dy * dy;
+      sxy += dx * dy;
     }
     let angle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
     if (angle > Math.PI / 2) angle -= Math.PI;
@@ -585,7 +557,10 @@
           area += x1 * y2 - x2 * y1;
         }
         const a = Math.abs(area);
-        if (a > bestArea) { bestArea = a; ring = r; }
+        if (a > bestArea) {
+          bestArea = a;
+          ring = r;
+        }
       }
     } else {
       return { x: c[0], y: c[1], angle: 0 };
@@ -597,9 +572,7 @@
   // Color-independent: decides which labels survive overlap resolution and
   // where/how they sit. Measurement uses a detached context so layout can run
   // outside the paint, and the result is cached on the scene.
-  function layoutLabels(
-    pathFn: ReturnType<typeof geoPath>,
-  ): PlacedLabel[] {
+  function layoutLabels(pathFn: ReturnType<typeof geoPath>): PlacedLabel[] {
     if (!features) return [];
     const mctx = getMeasureCtx();
     if (!mctx) return [];
@@ -609,7 +582,7 @@
     const seenRoadName = new Set<string>();
 
     const roadFont = '500 10px "Fira Mono", ui-monospace, monospace';
-    const areaFont = '600 11px system-ui, sans-serif';
+    const areaFont = "600 11px system-ui, sans-serif";
 
     type Item = {
       name: string;
@@ -633,7 +606,14 @@
         if (!p) continue;
         if (p.x < 0 || p.y < 0 || p.x > mapWidth || p.y > mapHeight) continue;
         seenRoadName.add(name);
-        items.push({ name, isRoad, x: p.x, y: p.y, angle: p.angle, length: p.length });
+        items.push({
+          name,
+          isRoad,
+          x: p.x,
+          y: p.y,
+          angle: p.angle,
+          length: p.length,
+        });
       } else if (showAllLabels) {
         const p = areaPlacement(f, pathFn);
         if (!p) continue;
@@ -690,6 +670,86 @@
       ctx.restore();
     }
   }
+
+  function openPrintWindow(pages: { label: string; url: string, location: string }[]) {
+    if (pages.length === 0) return;
+    const win = window.open("", "_blank");
+    if (!win) return;
+
+    const body = pages
+      .filter(pg => pg.label !== "boundary")
+      .map(
+        (p, i) =>
+          `<section class="page">
+            <div class="title">
+              <h2 class="location">${p.location}</h2>
+              <h2 class="layer" style="margin-left: ${i * 8}rem">${p.label}</h2>
+            </div>
+            <img src="${p.url}" alt="${p.label}" />
+          </section>`,
+      )
+      .join("");
+
+    win.document.write(
+      `<!doctype html><html><head><title>Map layers</title><meta charset="utf-8" /><style>
+        @page { margin: 1.5cm; }
+        html, body { margin: 0; padding: 0; }
+        .page {
+          page-break-after: always;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          min-height: 92vh;
+        }
+        .page:last-child { page-break-after: auto; }
+        h2 {
+          font: 600 13px system-ui, sans-serif;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+          color: #555;
+          margin: 0 0 1rem;
+        }
+
+        .title {
+          display: flex;
+          flex-direction: row;
+          align-items: end;
+          width: 100%;
+        }
+
+        /* Fixed-width left slot so the location title lands in the same
+           horizontal space on every printed page. */
+        .location {
+          flex: 0 0 9rem;
+          margin-left: 25%rem;
+        }
+
+        /* Each layer name keeps its natural width and is offset right via an
+           inline margin-left, so stacked pages don't overlap their names. */
+        .layer {
+          flex: 0 0 auto;
+          white-space: nowrap;
+        }
+        img { max-width: 100%; max-height: 84vh; object-fit: contain; }
+      </style></head><body>${body}</body></html>`,
+    );
+    win.document.close();
+
+    const imgs = Array.from(win.document.images);
+    let remaining = imgs.length;
+    const done = () => {
+      if (--remaining <= 0) win.print();
+    };
+    if (remaining === 0) {
+      win.print();
+      return;
+    }
+    for (const img of imgs) {
+      if (img.complete) done();
+      else img.onload = img.onerror = done;
+    }
+  }
 </script>
 
 <div
@@ -702,6 +762,9 @@
     {#each visibleLayers as id (id)}
       <canvas bind:this={layerCanvases[id]} data-layer={id}></canvas>
     {/each}
+    <button type="button" class="print-btn" onclick={printLayers}>
+      Print
+    </button>
   {:else}
     <div class="map-placeholder">Enter a location to draw the map.</div>
   {/if}
@@ -769,12 +832,40 @@
     text-transform: uppercase;
   }
 
+
+  .print-btn {
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    border: 1px solid #ff3e00 !important;
+    border-radius: 0.3rem;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: transparent;
+    position: absolute;
+    right: 0;
+    margin-top: 2rem;
+    margin-right: 1rem;
+    backdrop-filter: blur(10px);
+    box-shadow: rgba(100, 100, 111, 0.4) 0px 7px 29px 0px;
+  }
+
+  .print-btn:hover {
+    background: #e63800;
+    color: white;
+  }
+
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .spinner { animation-duration: 2s; }
+    .spinner {
+      animation-duration: 2s;
+    }
   }
 
   @media (max-width: 720px) {

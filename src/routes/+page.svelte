@@ -188,7 +188,6 @@
           contoursVisible={appliedContours}
           labelsVisible={appliedLabels}
           {boundaryVisible}
-          onPrint={() => mapCanvas?.printLayers()}
         />
       {/if}
     </div>
@@ -224,6 +223,7 @@
     loading={busy}
     bind:mapWidth
     bind:mapHeight
+    {displayName}
   />
 </section>
 
