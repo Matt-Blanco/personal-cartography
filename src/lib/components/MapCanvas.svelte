@@ -20,6 +20,7 @@
     features,
     contours,
     styles,
+    rotation = 0,
     showLabels,
     loading,
     mapWidth = $bindable(),
@@ -31,6 +32,7 @@
     features: FeatureCollection<GeometryObject> | null;
     contours: ContourFeature[] | null;
     styles: MapStyles;
+    rotation?: number;
     showLabels: boolean;
     loading: boolean;
     mapWidth: number;
@@ -81,7 +83,9 @@
 
   const projection = $derived.by(() => {
     if (!fitFeature || mapWidth <= 0 || mapHeight <= 0) return null;
-    return geoMercator().fitSize([mapWidth, mapHeight], fitFeature);
+    // Apply the rotation before fitting so the rotated extent is sized to fill
+    // the canvas (rather than rotating a pre-fit map and clipping its corners).
+    return geoMercator().angle(rotation).fitSize([mapWidth, mapHeight], fitFeature);
   });
 
   const featuresByLayer = $derived.by(() => {
@@ -677,7 +681,7 @@
     if (!win) return;
 
     const body = pages
-      .filter(pg => pg.label !== "boundary")
+      .filter(pg => pg.label !== LAYER_LABELS.boundary)
       .map(
         (p, i) =>
           `<section class="page">
@@ -716,6 +720,7 @@
           flex-direction: row;
           align-items: end;
           width: 100%;
+          margin-left: 15%;1
         }
 
         /* Fixed-width left slot so the location title lands in the same

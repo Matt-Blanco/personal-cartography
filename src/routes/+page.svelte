@@ -7,6 +7,7 @@
   import { DEFAULT_STYLES, type MapStyles } from "$lib/styles";
   import SearchForm from "$lib/components/SearchForm.svelte";
   import EditPanel from "$lib/components/EditPanel.svelte";
+  import AddPanel from "$lib/components/AddPanel.svelte";
   import MapCanvas from "$lib/components/MapCanvas.svelte";
 
   // Form state
@@ -23,7 +24,7 @@
   let labelsEnabled = $state(false);
 
   // UI state
-  let activeTab = $state<"search" | "edit">("search");
+  let activeTab = $state<"search" | "edit" | "add">("search");
   let isMobile = $state(false);
   let collapsed = $state(false);
   let mapWidth = $state(0);
@@ -59,6 +60,9 @@
 
   // Styling state — passed to MapCanvas and EditPanel
   let styles = $state<MapStyles>(structuredClone(DEFAULT_STYLES));
+
+  // Map rotation in degrees, driven by the Add panel's dial.
+  let rotation = $state(0);
 
   // Bound to MapCanvas so the Edit panel's Print button can trigger a
   // per-layer printout.
@@ -189,6 +193,8 @@
           labelsVisible={appliedLabels}
           {boundaryVisible}
         />
+      {:else if !(isMobile && collapsed) && activeTab === "add" && hasMap}
+        <AddPanel bind:rotation />
       {/if}
     </div>
 
@@ -209,6 +215,15 @@
       >
         Edit
       </button>
+      <button
+        type="button"
+        class:active={activeTab === "add"}
+        disabled={!hasMap}
+        onclick={() => (activeTab = "add")}
+        title={hasMap ? undefined : "Generate a map first"}
+      >
+        Add
+      </button>
     </nav>
   </aside>
 
@@ -219,6 +234,7 @@
     {features}
     {contours}
     {styles}
+    {rotation}
     showLabels={appliedLabels}
     loading={busy}
     bind:mapWidth
