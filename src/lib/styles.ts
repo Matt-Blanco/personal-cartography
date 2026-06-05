@@ -27,6 +27,17 @@ export const DEFAULT_MARK: FillMark = {
   angle: 45,
 };
 
+// Curated font stacks offered in the Edit panel. The stored value is the CSS
+// `font-family` stack itself, so it drops straight into a canvas `font` string
+// or a print-window stylesheet without a lookup.
+export const FONT_OPTIONS: { label: string; stack: string }[] = [
+  { label: "Sans-serif", stack: "system-ui, sans-serif" },
+  { label: "Serif", stack: "Georgia, 'Times New Roman', serif" },
+  { label: "Monospace", stack: '"Fira Mono", ui-monospace, monospace' },
+  { label: "Rounded", stack: '"Trebuchet MS", "Segoe UI", sans-serif' },
+  { label: "Condensed", stack: '"Arial Narrow", "Helvetica Neue", sans-serif' },
+];
+
 export type RoadGroup = "major" | "through" | "local" | "path";
 
 export const ROAD_WIDTHS: Record<string, number> = {
@@ -67,6 +78,9 @@ export type MapStyles = {
   rail: string;
   contour: string;
   label: { fill: string; halo: string };
+  // CSS font-family stacks. `title` styles the printed address + layer-name
+  // headings; `label` styles the on-map road & feature names.
+  fonts: { title: string; label: string };
 };
 
 export const DEFAULT_STYLES: MapStyles = {
@@ -84,6 +98,10 @@ export const DEFAULT_STYLES: MapStyles = {
   rail: "#555555",
   contour: "#a07e54",
   label: { fill: "#333333", halo: "#ffffff" },
+  fonts: {
+    title: "system-ui, sans-serif",
+    label: '"Fira Mono", ui-monospace, monospace',
+  },
 };
 
 export function roadStyleFor(

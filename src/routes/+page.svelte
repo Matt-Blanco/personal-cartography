@@ -61,8 +61,10 @@
   // Styling state — passed to MapCanvas and EditPanel
   let styles = $state<MapStyles>(structuredClone(DEFAULT_STYLES));
 
-  // Map rotation in degrees, driven by the Add panel's dial.
+  // Map rotation (degrees) and skew distortion (degrees), driven by the Add panel.
   let rotation = $state(0);
+  let skewX = $state(0);
+  let skewY = $state(0);
 
   // Bound to MapCanvas so the Edit panel's Print button can trigger a
   // per-layer printout.
@@ -194,7 +196,7 @@
           {boundaryVisible}
         />
       {:else if !(isMobile && collapsed) && activeTab === "add" && hasMap}
-        <AddPanel bind:rotation />
+        <AddPanel bind:rotation bind:skewX bind:skewY />
       {/if}
     </div>
 
@@ -235,6 +237,8 @@
     {contours}
     {styles}
     {rotation}
+    {skewX}
+    {skewY}
     showLabels={appliedLabels}
     loading={busy}
     bind:mapWidth

@@ -21,6 +21,8 @@
     contours,
     styles,
     rotation = 0,
+    skewX = 0,
+    skewY = 0,
     showLabels,
     loading,
     mapWidth = $bindable(),
@@ -33,6 +35,8 @@
     contours: ContourFeature[] | null;
     styles: MapStyles;
     rotation?: number;
+    skewX?: number;
+    skewY?: number;
     showLabels: boolean;
     loading: boolean;
     mapWidth: number;
@@ -213,6 +217,8 @@
     const s = scene;
     const snap = $state.snapshot(styles) as MapStyles;
     const layers = visibleLayers;
+    const sx = skewX;
+    const sy = skewY;
     if (!s) return;
     const id = requestAnimationFrame(() => {
       const dpr = window.devicePixelRatio || 1;
@@ -224,11 +230,30 @@
         const ctx = c.getContext("2d");
         if (!ctx) continue;
         ctx.scale(dpr, dpr);
+        applySkew(ctx, sx, sy, mapWidth, mapHeight);
         drawLayer(lid, ctx, s, snap, dpr);
       }
     });
     return () => cancelAnimationFrame(id);
   });
+
+  // Shear the context around the canvas centre so the map distorts in place.
+  // Skew is an affine transform that can't fold into the d3 projection, so it's
+  // applied at paint time (mirrored in the print path) rather than into `scene`.
+  function applySkew(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    sy: number,
+    w: number,
+    h: number,
+  ) {
+    if (!sx && !sy) return;
+    const cx = w / 2;
+    const cy = h / 2;
+    ctx.translate(cx, cy);
+    ctx.transform(1, Math.tan((sy * Math.PI) / 180), Math.tan((sx * Math.PI) / 180), 1, 0, 0);
+    ctx.translate(-cx, -cy);
+  }
 
   // Build a repeating tile for a fill mark. Drawn at device-pixel resolution so
   // marks stay crisp on retina; the returned pattern is rotated for line/cross.
@@ -443,7 +468,12 @@
       if (!ctx) continue;
       ctx.scale(scale, scale);
       ctx.translate(margin, margin);
+      // Skew only the map content; the registration/crop marks stay square so
+      // stacked layer printouts still align.
+      ctx.save();
+      applySkew(ctx, skewX, skewY, mapWidth, mapHeight);
       drawLayer(lid, ctx, s, st, scale);
+      ctx.restore();
       drawPrintMarks(ctx, mapWidth, mapHeight, margin);
       pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png"), location: displayName ?? "" });
     }
@@ -585,8 +615,9 @@
     const placed: Placed[] = [];
     const seenRoadName = new Set<string>();
 
-    const roadFont = '500 10px "Fira Mono", ui-monospace, monospace';
-    const areaFont = "600 11px system-ui, sans-serif";
+    const family = styles.fonts.label;
+    const roadFont = `500 10px ${family}`;
+    const areaFont = `600 11px ${family}`;
 
     type Item = {
       name: string;
@@ -708,7 +739,7 @@
         }
         .page:last-child { page-break-after: auto; }
         h2 {
-          font: 600 13px system-ui, sans-serif;
+          font: 600 13px ${styles.fonts.title};
           text-transform: uppercase;
           letter-spacing: 0.06em;
           color: #555;

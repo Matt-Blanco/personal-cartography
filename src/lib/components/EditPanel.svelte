@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { DEFAULT_MARK, type MapStyles, type FillStyle } from "$lib/styles";
+  import {
+    DEFAULT_MARK,
+    FONT_OPTIONS,
+    type MapStyles,
+    type FillStyle,
+  } from "$lib/styles";
   import type { LayerKey } from "$lib/layers";
 
   let {
@@ -19,6 +24,46 @@
   function setFillMode(style: FillStyle, mode: string) {
     style.mark =
       mode === "mark" ? { ...DEFAULT_MARK, color: style.fill } : null;
+  }
+
+  // The Road & feature names dropdown starts with the curated stacks and can be
+  // expanded to every font installed on the machine via the Local Font Access
+  // API. That API only resolves after a user gesture grants permission, and is
+  // Chromium-only — hence the explicit button and status states.
+  type FontOption = { label: string; stack: string };
+  let fontOptions = $state<FontOption[]>([...FONT_OPTIONS]);
+  let fontStatus = $state<
+    "idle" | "loading" | "loaded" | "unsupported" | "denied"
+  >("idle");
+
+  async function loadSystemFonts() {
+    const query = (
+      window as unknown as {
+        queryLocalFonts?: () => Promise<{ family: string }[]>;
+      }
+    ).queryLocalFonts;
+    if (typeof query !== "function") {
+      fontStatus = "unsupported";
+      return;
+    }
+    fontStatus = "loading";
+    try {
+      const fonts = await query();
+      const seen = new Set(FONT_OPTIONS.map((o) => o.label));
+      const installed: FontOption[] = [];
+      for (const f of fonts) {
+        if (seen.has(f.family)) continue;
+        seen.add(f.family);
+        // Quote the family so multi-word names resolve; the curated stacks stay
+        // pinned at the top so the current selection keeps matching.
+        installed.push({ label: f.family, stack: `"${f.family}", sans-serif` });
+      }
+      installed.sort((a, b) => a.label.localeCompare(b.label));
+      fontOptions = [...FONT_OPTIONS, ...installed];
+      fontStatus = "loaded";
+    } catch {
+      fontStatus = "denied";
+    }
   }
 </script>
 
@@ -84,6 +129,41 @@
       <span class="color-name">Page</span>
       <input type="color" bind:value={styles.background} />
     </label>
+  </fieldset>
+
+  <fieldset class="layers">
+    <legend>Fonts</legend>
+    <!-- <label class="color-row">
+      <span class="color-name">Address &amp; label</span>
+      <select bind:value={styles.fonts.title} style:font-family={styles.fonts.title}>
+        {#each FONT_OPTIONS as opt (opt.stack)}
+          <option value={opt.stack} style:font-family={opt.stack}>{opt.label}</option>
+        {/each}
+      </select>
+    </label> -->
+    <label class="color-row">
+      <span class="color-name">Road &amp; feature names</span>
+      <select bind:value={styles.fonts.label} style:font-family={styles.fonts.label}>
+        {#each fontOptions as opt (opt.stack)}
+          <option value={opt.stack} style:font-family={opt.stack}>{opt.label}</option>
+        {/each}
+      </select>
+    </label>
+    {#if fontStatus !== "loaded"}
+      <button
+        type="button"
+        class="load-fonts"
+        onclick={loadSystemFonts}
+        disabled={fontStatus === "loading"}
+      >
+        {fontStatus === "loading" ? "Loading…" : "Show installed fonts"}
+      </button>
+    {/if}
+    {#if fontStatus === "unsupported"}
+      <span class="font-note">This browser can't list installed fonts.</span>
+    {:else if fontStatus === "denied"}
+      <span class="font-note">Font access was denied.</span>
+    {/if}
   </fieldset>
 
   {#if boundaryVisible}
@@ -242,5 +322,28 @@
     font-size: 0.72rem;
     color: #888;
     text-align: right;
+  }
+
+  .load-fonts {
+    align-self: flex-start;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #ff3e00;
+    background: white;
+    border: 1px solid #ff3e00;
+    border-radius: 0.3rem;
+    cursor: pointer;
+  }
+
+  .load-fonts:disabled {
+    color: #bbb;
+    border-color: #ddd;
+    cursor: default;
+  }
+
+  .font-note {
+    font-size: 0.72rem;
+    color: #888;
   }
 </style>
