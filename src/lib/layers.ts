@@ -66,3 +66,29 @@ export function classify(props: Record<string, unknown> | null | undefined): Lay
 	}
 	return null;
 }
+
+// Storeys are ~3m; untagged buildings extrude to a default so the whole layer
+// gains depth under a perspective tilt.
+const METERS_PER_LEVEL = 3;
+const DEFAULT_BUILDING_HEIGHT = 6;
+
+// Best-effort building height in meters from OSM tags: an explicit `height`
+// (stripping unit suffixes like " m"), else `building:levels` × 3, else a
+// sensible default. Always returns a positive number.
+export function buildingHeightMeters(
+	props: Record<string, unknown> | null | undefined,
+): number {
+	if (props) {
+		const raw = props.height ?? props['building:height'];
+		if (raw != null) {
+			const m = parseFloat(String(raw));
+			if (Number.isFinite(m) && m > 0) return m;
+		}
+		const levels = props['building:levels'];
+		if (levels != null) {
+			const n = parseFloat(String(levels));
+			if (Number.isFinite(n) && n > 0) return n * METERS_PER_LEVEL;
+		}
+	}
+	return DEFAULT_BUILDING_HEIGHT;
+}

@@ -329,9 +329,9 @@
     padding: 0.25rem 0.6rem;
     font-size: 0.78rem;
     font-weight: 600;
-    color: #ff3e00;
+    color: var(--color-theme-1);
     background: white;
-    border: 1px solid #ff3e00;
+    border: 1px solid var(--color-theme-1);
     border-radius: 0.3rem;
     cursor: pointer;
   }

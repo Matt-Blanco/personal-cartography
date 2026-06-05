@@ -66,6 +66,7 @@
   let rotation = $state(0);
   let skewX = $state(0);
   let skewY = $state(0);
+  let tilt = $state(0);
 
   // Icons stamped onto the map by dragging from the Add panel gallery.
   let placedIcons = $state<PlacedIcon[]>([]);
@@ -200,7 +201,7 @@
           {boundaryVisible}
         />
       {:else if !(isMobile && collapsed) && activeTab === "add" && hasMap}
-        <AddPanel bind:rotation bind:skewX bind:skewY />
+        <AddPanel bind:rotation bind:skewX bind:skewY bind:tilt />
       {/if}
     </div>
 
@@ -243,6 +244,7 @@
     {rotation}
     {skewX}
     {skewY}
+    {tilt}
     bind:placedIcons
     showLabels={appliedLabels}
     loading={busy}
@@ -303,9 +305,9 @@
     padding: 0.4rem 0.75rem;
     font-size: 0.85rem;
     font-weight: 600;
-    color: #ff3e00;
+    color: var(--color-theme-1);
     background: white;
-    border: 1px solid #ff3e00;
+    border: 1px solid var(--color-theme-1);
     cursor: pointer;
   }
 
@@ -339,7 +341,7 @@
 
   .tab-strip button.active {
     background: white;
-    color: #ff3e00;
+    color: var(--color-theme-1);
     margin-right: -1px;
   }
 

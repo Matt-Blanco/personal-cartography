@@ -155,7 +155,7 @@
 
   input[type="range"] {
     width: 100%;
-    accent-color: #ff3e00;
+    accent-color: var(--color-theme-1);
   }
 
   .range-bounds {
@@ -174,7 +174,7 @@
   }
 
   input[type="text"]:focus {
-    border-color: #ff3e00;
+    border-color: var(--color-theme-1);
     box-shadow: 0 0 0 3px rgba(255, 62, 0, 0.2);
   }
 
@@ -207,7 +207,7 @@
 
   .layer-option input[type="checkbox"] {
     margin: 0;
-    accent-color: #ff3e00;
+    accent-color: var(--color-theme-1);
   }
 
   .layer-tag {
@@ -221,7 +221,7 @@
     font-size: 1rem;
     font-weight: 600;
     color: white;
-    background: #ff3e00;
+    background: var(--color-theme-1);
     border: none;
     border-radius: 0.4rem;
     cursor: pointer;

@@ -5,7 +5,29 @@
     rotation = $bindable(),
     skewX = $bindable(),
     skewY = $bindable(),
-  }: { rotation: number; skewX: number; skewY: number } = $props();
+    tilt = $bindable(),
+  }: { rotation: number; skewX: number; skewY: number; tilt: number } =
+    $props();
+
+  const MAX_TILT = 60;
+
+  // Side-profile preview: a ground line that leans back as tilt increases, with
+  // a raised block hinting at the resulting depth.
+  const tiltRad = $derived((tilt * Math.PI) / 180);
+  const profile = $derived.by(() => {
+    const cx = C;
+    const baseY = SIZE - 24;
+    const halfW = C - 16;
+    const dy = halfW * Math.sin(tiltRad) * 0.6;
+    return {
+      left: `${cx - halfW},${baseY + dy}`,
+      right: `${cx + halfW},${baseY - dy}`,
+      // A small box standing on the far (right) end to read as height.
+      boxX: cx + halfW - 26,
+      boxY: baseY - dy,
+      boxLift: 22 * Math.cos(tiltRad),
+    };
+  });
 
   function onIconDragStart(e: DragEvent, id: string) {
     if (!e.dataTransfer) return;
@@ -211,6 +233,57 @@
   </fieldset>
 
   <fieldset class="layers">
+    <legend>Perspective</legend>
+    <div class="dial-wrap">
+      <svg
+        class="dial"
+        viewBox="0 0 {SIZE} {SIZE}"
+        width={SIZE}
+        height={SIZE}
+        aria-hidden="true"
+      >
+        <rect class="frame" x="1" y="1" width={SIZE - 2} height={SIZE - 2} rx="4" />
+        <line
+          class="needle"
+          x1={profile.left.split(",")[0]}
+          y1={profile.left.split(",")[1]}
+          x2={profile.right.split(",")[0]}
+          y2={profile.right.split(",")[1]}
+        />
+        <polygon
+          class="preview"
+          points="{profile.boxX},{profile.boxY} {profile.boxX + 20},{profile.boxY -
+            profile.boxLift * 0.4} {profile.boxX + 20},{profile.boxY -
+            profile.boxLift} {profile.boxX},{profile.boxY - profile.boxLift * 0.6}"
+        />
+      </svg>
+      <label class="slider-row">
+        <input
+          type="range"
+          min="0"
+          max={MAX_TILT}
+          step="1"
+          bind:value={tilt}
+          aria-label="Map perspective tilt"
+        />
+      </label>
+      <div class="control-footer">
+        <span class="readout">{tilt}°</span>
+        <button
+          type="button"
+          class="reset-btn"
+          disabled={tilt === 0}
+          onclick={() => (tilt = 0)}
+          title="Reset perspective"
+          aria-label="Reset perspective"
+        >
+          {@render resetIcon()}
+        </button>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="layers">
     <legend>Icons</legend>
     <p class="hint">Drag an icon onto the map.</p>
     <div class="icon-grid">
@@ -286,7 +359,7 @@
 
   .preview {
     fill: rgba(255, 62, 0, 0.08);
-    stroke: #ff3e00;
+    stroke: var(--color-theme-1);
     stroke-width: 1.5;
   }
 
@@ -296,9 +369,19 @@
   }
 
   .dot {
-    fill: #ff3e00;
+    fill: var(--color-theme-1);
     stroke: white;
     stroke-width: 2;
+  }
+
+  .slider-row {
+    width: 100%;
+    display: flex;
+  }
+
+  .slider-row input[type="range"] {
+    width: 100%;
+    cursor: pointer;
   }
 
   .control-footer {
@@ -329,8 +412,8 @@
   }
 
   .reset-btn:hover:not(:disabled) {
-    border-color: #ff3e00;
-    color: #ff3e00;
+    border-color: var(--color-theme-1);
+    color: var(--color-theme-1);
   }
 
   .reset-btn:disabled {
@@ -374,8 +457,8 @@
   }
 
   .icon-tile:hover {
-    border-color: #ff3e00;
-    color: #ff3e00;
+    border-color: var(--color-theme-1);
+    color: var(--color-theme-1);
   }
 
   .icon-tile:active {

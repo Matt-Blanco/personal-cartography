@@ -2,7 +2,7 @@
   import { geoMercator, geoPath } from "d3-geo";
   import type { Feature, FeatureCollection, GeometryObject } from "geojson";
   import { bboxToCornersFeature, type Bbox } from "$lib/geocode";
-  import { classify, type LayerKey } from "$lib/layers";
+  import { classify, buildingHeightMeters, type LayerKey } from "$lib/layers";
   import type { ContourFeature } from "$lib/contours";
   import {
     roadStyleFor,
@@ -24,6 +24,7 @@
     rotation = 0,
     skewX = 0,
     skewY = 0,
+    tilt = 0,
     placedIcons = $bindable([]),
     showLabels,
     loading,
@@ -39,6 +40,7 @@
     rotation?: number;
     skewX?: number;
     skewY?: number;
+    tilt?: number;
     placedIcons?: PlacedIcon[];
     showLabels: boolean;
     loading: boolean;
@@ -156,6 +158,23 @@
     return geoMercator().angle(rotation).fitSize([mapWidth, mapHeight], fitFeature);
   });
 
+  // Vertical exaggeration so terrain/building depth reads at map scales.
+  const VERT_EXAGGERATION = 5;
+
+  const tiltRad = $derived((tilt * Math.PI) / 180);
+
+  // Pixels per real-world meter on the ground (same haversine basis as the
+  // contour fetch), scaled up so elevation/height differences are visible.
+  const vScale = $derived.by(() => {
+    if (!bbox || mapWidth <= 0) return 0;
+    const latR = (((bbox.south + bbox.north) / 2) * Math.PI) / 180;
+    const groundWidthM = Math.max(
+      1,
+      (bbox.east - bbox.west) * 111_000 * Math.cos(latR),
+    );
+    return (mapWidth / groundWidthM) * VERT_EXAGGERATION;
+  });
+
   const featuresByLayer = $derived.by(() => {
     const out: Record<LayerKey, Feature<GeometryObject>[]> = {
       roads: [],
@@ -182,12 +201,19 @@
     font: string;
   };
 
+  // An extruded building: side walls + roof, baked in screen space. Sorted
+  // far→near so painting them in order gives plausible occlusion.
+  type BuildingPrism = { walls: Path2D; roof: Path2D };
+
   type Scene = {
     boundary: Path2D | null;
     contours: Path2D | null;
     green: Path2D;
     water: Path2D;
     buildings: Path2D;
+    // When tilted (>0), buildings render as extruded prisms instead of flat
+    // footprints; null means draw the flat `buildings` footprint path.
+    prisms: BuildingPrism[] | null;
     roads: { hw: string; path: Path2D }[];
     rail: Path2D;
     labels: PlacedLabel[];
@@ -201,8 +227,67 @@
     const proj = projection;
     if (!proj || mapWidth <= 0 || mapHeight <= 0) return null;
     const path = geoPath(proj);
+    const tilted = tilt > 0;
 
-    const buildPath = (feats: Feature<GeometryObject>[]) => {
+    // --- Oblique camera (only used when tilted) --------------------------
+    // Foreshorten the ground plane around its vertical centre, then lift each
+    // vertex by its elevation/height. Operates in projected pixel space.
+    const ct = Math.cos(tiltRad);
+    const st = Math.sin(tiltRad);
+    const cyc = mapHeight / 2;
+    const vs = vScale;
+    const ob = (X: number, Y: number, zPx: number): Pt => [
+      X,
+      cyc + (Y - cyc) * ct - zPx * st,
+    ];
+
+    const projectRing = (ring: Pt[]): Pt[] => {
+      const out: Pt[] = [];
+      for (const c of ring) {
+        const p = proj(c);
+        if (p && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+          out.push([p[0], p[1]]);
+      }
+      return out;
+    };
+
+    // Walk a feature's rings/lines into a Path2D through the oblique camera.
+    // `z` is the lift (px) applied to every vertex; polygons are closed.
+    const obliquePath = (
+      feats: Feature<GeometryObject>[],
+      zOf: (f: Feature<GeometryObject>) => number,
+    ): Path2D => {
+      const p = new Path2D();
+      const addRing = (ring: Pt[], z: number, close: boolean) => {
+        const pr = projectRing(ring);
+        let started = false;
+        for (const [X, Y] of pr) {
+          const [sx, sy] = ob(X, Y, z);
+          if (!started) {
+            p.moveTo(sx, sy);
+            started = true;
+          } else p.lineTo(sx, sy);
+        }
+        if (started && close) p.closePath();
+      };
+      for (const f of feats) {
+        const z = zOf(f);
+        const g = f.geometry;
+        if (g.type === "Polygon")
+          for (const r of g.coordinates as Pt[][]) addRing(r, z, true);
+        else if (g.type === "MultiPolygon")
+          for (const poly of g.coordinates as Pt[][][])
+            for (const r of poly) addRing(r, z, true);
+        else if (g.type === "LineString")
+          addRing(g.coordinates as Pt[], z, false);
+        else if (g.type === "MultiLineString")
+          for (const part of g.coordinates as Pt[][]) addRing(part, z, false);
+      }
+      return p;
+    };
+
+    // Flat geoPath builder (used when not tilted — fast and unchanged).
+    const flatPath = (feats: Feature<GeometryObject>[]) => {
       const p = new Path2D();
       for (const f of feats) {
         const d = path(f);
@@ -211,18 +296,93 @@
       return p;
     };
 
+    const buildPath = (feats: Feature<GeometryObject>[]) =>
+      tilted ? obliquePath(feats, () => 0) : flatPath(feats);
+
+    // Extrude buildings into wall + roof prisms, sorted far→near.
+    const buildPrisms = (
+      feats: Feature<GeometryObject>[],
+    ): BuildingPrism[] => {
+      const ringsOf = (f: Feature<GeometryObject>): Pt[][] => {
+        const g = f.geometry;
+        const out: Pt[][] = [];
+        if (g.type === "Polygon")
+          out.push(projectRing((g.coordinates as Pt[][])[0] ?? []));
+        else if (g.type === "MultiPolygon")
+          for (const poly of g.coordinates as Pt[][][])
+            out.push(projectRing(poly[0] ?? []));
+        return out.filter((r) => r.length >= 2);
+      };
+      const prisms: (BuildingPrism & { sortY: number })[] = [];
+      for (const f of feats) {
+        const rings = ringsOf(f);
+        if (rings.length === 0) continue;
+        const zPx = buildingHeightMeters(f.properties) * vs;
+        const walls = new Path2D();
+        const roof = new Path2D();
+        let sumY = 0;
+        let count = 0;
+        for (const ring of rings) {
+          for (let i = 0; i < ring.length - 1; i++) {
+            const a = ring[i];
+            const b = ring[i + 1];
+            const ba = ob(a[0], a[1], 0);
+            const bb = ob(b[0], b[1], 0);
+            const tb = ob(b[0], b[1], zPx);
+            const ta = ob(a[0], a[1], zPx);
+            walls.moveTo(ba[0], ba[1]);
+            walls.lineTo(bb[0], bb[1]);
+            walls.lineTo(tb[0], tb[1]);
+            walls.lineTo(ta[0], ta[1]);
+            walls.closePath();
+            sumY += ba[1];
+            count++;
+          }
+          let started = false;
+          for (const [X, Y] of ring) {
+            const [sx, sy] = ob(X, Y, zPx);
+            if (!started) {
+              roof.moveTo(sx, sy);
+              started = true;
+            } else roof.lineTo(sx, sy);
+          }
+          if (started) roof.closePath();
+        }
+        prisms.push({ walls, roof, sortY: count ? sumY / count : 0 });
+      }
+      // Smaller screen-Y = further up = further away: draw those first.
+      prisms.sort((a, b) => a.sortY - b.sortY);
+      return prisms.map(({ walls, roof }) => ({ walls, roof }));
+    };
+
     let boundaryPath: Path2D | null = null;
     if (
       boundary &&
       (boundary.geometry.type === "Polygon" ||
         boundary.geometry.type === "MultiPolygon")
     ) {
-      const d = path(boundary);
-      if (d) boundaryPath = new Path2D(d);
+      if (tilted) {
+        boundaryPath = obliquePath([boundary], () => 0);
+      } else {
+        const d = path(boundary);
+        if (d) boundaryPath = new Path2D(d);
+      }
     }
 
-    const contoursPath =
-      contours && contours.length > 0 ? buildPath(contours) : null;
+    let contoursPath: Path2D | null = null;
+    if (contours && contours.length > 0) {
+      if (tilted) {
+        // Terrace each band by its elevation above the lowest band.
+        let minV = Infinity;
+        for (const c of contours) minV = Math.min(minV, c.properties.value);
+        contoursPath = obliquePath(
+          contours,
+          (f) => ((f as ContourFeature).properties.value - minV) * vs,
+        );
+      } else {
+        contoursPath = flatPath(contours);
+      }
+    }
 
     const roadGroups: Record<string, Feature<GeometryObject>[]> = {};
     for (const f of featuresByLayer.roads) {
@@ -234,15 +394,26 @@
       path: buildPath(feats),
     }));
 
+    let labels = showLabels ? layoutLabels(path) : [];
+    if (tilted && labels.length) {
+      // Keep labels pinned to their (now foreshortened) ground anchors; text
+      // stays screen-upright.
+      labels = labels.map((l) => {
+        const [x, y] = ob(l.x, l.y, 0);
+        return { ...l, x, y };
+      });
+    }
+
     return {
       boundary: boundaryPath,
       contours: contoursPath,
       green: buildPath(featuresByLayer.green),
       water: buildPath(featuresByLayer.water),
-      buildings: buildPath(featuresByLayer.buildings),
+      buildings: tilted ? new Path2D() : flatPath(featuresByLayer.buildings),
+      prisms: tilted ? buildPrisms(featuresByLayer.buildings) : null,
       roads,
       rail: buildPath(featuresByLayer.rail),
-      labels: showLabels ? layoutLabels(path) : [],
+      labels,
     };
   });
 
@@ -371,6 +542,18 @@
     return pat;
   }
 
+  // Darken a #rrggbb color toward black by `f` (0..1) for shaded prism walls.
+  // Non-hex inputs (e.g. mark patterns) are returned unchanged.
+  function shade(color: string, f: number): string {
+    const m = /^#?([0-9a-f]{6})$/i.exec(color);
+    if (!m) return color;
+    const n = parseInt(m[1], 16);
+    const r = Math.round(((n >> 16) & 255) * f);
+    const g = Math.round(((n >> 8) & 255) * f);
+    const b = Math.round((n & 255) * f);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
   function fillStroke(
     ctx: CanvasRenderingContext2D,
     path: Path2D,
@@ -421,11 +604,29 @@
         return;
       case "green":
       case "water":
-      case "buildings":
         ctx.lineJoin = "round";
         ctx.lineCap = "butt";
         ctx.setLineDash([]);
         fillStroke(ctx, s[id], st[id], dpr);
+        return;
+      case "buildings":
+        ctx.lineJoin = "round";
+        ctx.lineCap = "butt";
+        ctx.setLineDash([]);
+        if (s.prisms) {
+          // Painter's order (far→near): shaded walls, then roof per building.
+          const wallFill = shade(st.buildings.fill, 0.72);
+          for (const pr of s.prisms) {
+            ctx.fillStyle = wallFill;
+            ctx.fill(pr.walls);
+            ctx.strokeStyle = st.buildings.stroke;
+            ctx.lineWidth = st.buildings.lineWidth;
+            ctx.stroke(pr.walls);
+            fillStroke(ctx, pr.roof, st.buildings, dpr);
+          }
+        } else {
+          fillStroke(ctx, s.buildings, st.buildings, dpr);
+        }
         return;
       case "roads":
         ctx.lineJoin = "round";
@@ -971,7 +1172,7 @@
     width: 2.25rem;
     height: 2.25rem;
     border: 3px solid rgba(255, 62, 0, 0.25);
-    border-top-color: #ff3e00;
+    border-top-color: var(--color-theme-1);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -989,7 +1190,7 @@
     padding: 0.6rem 1rem;
     font-size: 0.9rem;
     font-weight: 600;
-    border: 1px solid #ff3e00 !important;
+    border: 1px solid var(--color-theme-1) !important;
     border-radius: 0.3rem;
     cursor: pointer;
     text-transform: uppercase;
