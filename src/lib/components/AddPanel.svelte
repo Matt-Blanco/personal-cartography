@@ -1,9 +1,17 @@
 <script lang="ts">
+  import { ICONS, ICON_DND_TYPE } from "$lib/icons";
+
   let {
     rotation = $bindable(),
     skewX = $bindable(),
     skewY = $bindable(),
   }: { rotation: number; skewX: number; skewY: number } = $props();
+
+  function onIconDragStart(e: DragEvent, id: string) {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(ICON_DND_TYPE, id);
+    e.dataTransfer.effectAllowed = "copy";
+  }
 
   // Shared SVG viewBox size for both controls.
   const SIZE = 120;
@@ -109,6 +117,13 @@
   }
 </script>
 
+{#snippet resetIcon()}
+  <svg viewBox="0 0 24 24" aria-hidden="true">
+    <polyline points="3 5 3 11 9 11" />
+    <path d="M5 15a8 8 0 1 0 2-8.5L3 11" />
+  </svg>
+{/snippet}
+
 <div class="add-panel">
   <fieldset class="layers">
     <legend>Rotate Map</legend>
@@ -134,7 +149,19 @@
         <line class="needle" x1={C} y1={C} x2={dotX} y2={dotY} />
         <circle class="dot" cx={dotX} cy={dotY} r="7" />
       </svg>
-      <span class="readout">{rotation}°</span>
+      <div class="control-footer">
+        <span class="readout">{rotation}°</span>
+        <button
+          type="button"
+          class="reset-btn"
+          disabled={rotation === 0}
+          onclick={() => (rotation = 0)}
+          title="Reset rotation"
+          aria-label="Reset rotation"
+        >
+          {@render resetIcon()}
+        </button>
+      </div>
     </div>
   </fieldset>
 
@@ -164,7 +191,41 @@
         <polygon class="preview" points={preview} />
         <circle class="dot" cx={handleX} cy={handleY} r="7" />
       </svg>
-      <span class="readout">{skewX}° / {skewY}°</span>
+      <div class="control-footer">
+        <span class="readout">{skewX}° / {skewY}°</span>
+        <button
+          type="button"
+          class="reset-btn"
+          disabled={skewX === 0 && skewY === 0}
+          onclick={() => {
+            skewX = 0;
+            skewY = 0;
+          }}
+          title="Reset skew"
+          aria-label="Reset skew"
+        >
+          {@render resetIcon()}
+        </button>
+      </div>
+    </div>
+  </fieldset>
+
+  <fieldset class="layers">
+    <legend>Icons</legend>
+    <p class="hint">Drag an icon onto the map.</p>
+    <div class="icon-grid">
+      {#each ICONS as icon (icon.id)}
+        <button
+          type="button"
+          class="icon-tile"
+          draggable="true"
+          title={icon.label}
+          aria-label={icon.label}
+          ondragstart={(e) => onIconDragStart(e, icon.id)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">{@html icon.svg}</svg>
+        </button>
+      {/each}
     </div>
   </fieldset>
 </div>
@@ -240,10 +301,91 @@
     stroke-width: 2;
   }
 
+  .control-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
   .readout {
     font-family: "Fira Mono", ui-monospace, monospace;
     font-size: 0.9rem;
     font-weight: 600;
     color: #222;
+  }
+
+  .reset-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    padding: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 0.3rem;
+    color: #555;
+    cursor: pointer;
+  }
+
+  .reset-btn:hover:not(:disabled) {
+    border-color: #ff3e00;
+    color: #ff3e00;
+  }
+
+  .reset-btn:disabled {
+    color: #ccc;
+    cursor: default;
+  }
+
+  .reset-btn svg {
+    width: 0.95rem;
+    height: 0.95rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .hint {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #888;
+  }
+
+  .icon-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.4rem;
+  }
+
+  .icon-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 1;
+    padding: 0.35rem;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 0.3rem;
+    color: #333;
+    cursor: grab;
+  }
+
+  .icon-tile:hover {
+    border-color: #ff3e00;
+    color: #ff3e00;
+  }
+
+  .icon-tile:active {
+    cursor: grabbing;
+  }
+
+  .icon-tile svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+    pointer-events: none;
   }
 </style>

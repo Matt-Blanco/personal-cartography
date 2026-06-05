@@ -10,6 +10,7 @@
     type FillStyle,
     type FillMark,
   } from "$lib/styles";
+  import { ICONS_BY_ID, ICON_DND_TYPE, type PlacedIcon } from "$lib/icons";
 
   // Flag to show all avaialble labels, otherwise only road labels will be displayed.
   const showAllLabels = false;
@@ -23,6 +24,7 @@
     rotation = 0,
     skewX = 0,
     skewY = 0,
+    placedIcons = $bindable([]),
     showLabels,
     loading,
     mapWidth = $bindable(),
@@ -37,12 +39,74 @@
     rotation?: number;
     skewX?: number;
     skewY?: number;
+    placedIcons?: PlacedIcon[];
     showLabels: boolean;
     loading: boolean;
     mapWidth: number;
     mapHeight: number;
     displayName: string | null;
   } = $props();
+
+  // --- Draggable map icons ----------------------------------------------
+  // Icons live in a DOM overlay above the canvases (not painted into them), so
+  // they can be repositioned and removed after dropping. Positions are stored
+  // as fractions of the map box so they hold steady across resizes.
+  let mapEl = $state<HTMLDivElement | null>(null);
+  let nextIconUid = 0;
+
+  function fractionFromEvent(e: { clientX: number; clientY: number }) {
+    if (!mapEl) return null;
+    const rect = mapEl.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null;
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+  }
+
+  function onDragOver(e: DragEvent) {
+    if (e.dataTransfer?.types.includes(ICON_DND_TYPE)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  }
+
+  function onDrop(e: DragEvent) {
+    const iconId = e.dataTransfer?.getData(ICON_DND_TYPE);
+    if (!iconId || !ICONS_BY_ID[iconId]) return;
+    const f = fractionFromEvent(e);
+    if (!f) return;
+    e.preventDefault();
+    placedIcons = [
+      ...placedIcons,
+      { uid: nextIconUid++, iconId, x: f.x, y: f.y },
+    ];
+  }
+
+  // Pointer-drag an already-placed icon to reposition it.
+  let draggingUid = $state<number | null>(null);
+
+  function onIconPointerDown(e: PointerEvent, uid: number) {
+    draggingUid = uid;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onIconPointerMove(e: PointerEvent) {
+    if (draggingUid === null) return;
+    const f = fractionFromEvent(e);
+    if (!f) return;
+    placedIcons = placedIcons.map((p) =>
+      p.uid === draggingUid ? { ...p, x: f.x, y: f.y } : p,
+    );
+  }
+
+  function onIconPointerUp(e: PointerEvent) {
+    draggingUid = null;
+    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+  }
+
+  function removeIcon(uid: number) {
+    placedIcons = placedIcons.filter((p) => p.uid !== uid);
+  }
 
   // Each map layer renders onto its own stacked <canvas>, in this paint order
   // (earlier = underneath). Keeping layers physically separate lets the print
@@ -790,14 +854,41 @@
 
 <div
   class="map"
+  bind:this={mapEl}
   bind:clientWidth={mapWidth}
   bind:clientHeight={mapHeight}
   style:background={styles.background}
+  ondragover={onDragOver}
+  ondrop={onDrop}
+  role="application"
 >
   {#if bbox}
     {#each visibleLayers as id (id)}
       <canvas bind:this={layerCanvases[id]} data-layer={id}></canvas>
     {/each}
+
+    {#each placedIcons as icon (icon.uid)}
+      {#if ICONS_BY_ID[icon.iconId]}
+        <button
+          type="button"
+          class="map-icon"
+          class:dragging={draggingUid === icon.uid}
+          style:left="{icon.x * 100}%"
+          style:top="{icon.y * 100}%"
+          title="Drag to move · double-click to remove"
+          aria-label={ICONS_BY_ID[icon.iconId].label}
+          onpointerdown={(e) => onIconPointerDown(e, icon.uid)}
+          onpointermove={onIconPointerMove}
+          onpointerup={onIconPointerUp}
+          ondblclick={() => removeIcon(icon.uid)}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true"
+            >{@html ICONS_BY_ID[icon.iconId].svg}</svg
+          >
+        </button>
+      {/if}
+    {/each}
+
     <button type="button" class="print-btn" onclick={printLayers}>
       Print
     </button>
@@ -827,6 +918,31 @@
     inset: 0;
     width: 100%;
     height: 100%;
+  }
+
+  .map-icon {
+    position: absolute;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    transform: translate(-50%, -100%);
+    background: transparent;
+    border: none;
+    color: #333;
+    cursor: grab;
+    touch-action: none;
+    filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.9));
+  }
+
+  .map-icon.dragging {
+    cursor: grabbing;
+  }
+
+  .map-icon svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+    pointer-events: none;
   }
 
   .map-placeholder {

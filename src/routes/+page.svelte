@@ -5,6 +5,7 @@
   import type { LayerKey } from "$lib/layers";
   import { fetchContours, type ContourFeature } from "$lib/contours";
   import { DEFAULT_STYLES, type MapStyles } from "$lib/styles";
+  import type { PlacedIcon } from "$lib/icons";
   import SearchForm from "$lib/components/SearchForm.svelte";
   import EditPanel from "$lib/components/EditPanel.svelte";
   import AddPanel from "$lib/components/AddPanel.svelte";
@@ -65,6 +66,9 @@
   let rotation = $state(0);
   let skewX = $state(0);
   let skewY = $state(0);
+
+  // Icons stamped onto the map by dragging from the Add panel gallery.
+  let placedIcons = $state<PlacedIcon[]>([]);
 
   // Bound to MapCanvas so the Edit panel's Print button can trigger a
   // per-layer printout.
@@ -239,6 +243,7 @@
     {rotation}
     {skewX}
     {skewY}
+    bind:placedIcons
     showLabels={appliedLabels}
     loading={busy}
     bind:mapWidth
