@@ -18,6 +18,7 @@
   let {
     bbox,
     boundary,
+    origin = null,
     features,
     contours,
     styles,
@@ -34,6 +35,7 @@
   }: {
     bbox: Bbox | null;
     boundary: Feature<GeometryObject> | null;
+    origin?: [number, number] | null;
     features: FeatureCollection<GeometryObject> | null;
     contours: ContourFeature[] | null;
     styles: MapStyles;
@@ -110,6 +112,36 @@
     placedIcons = placedIcons.filter((p) => p.uid !== uid);
   }
 
+  // --- Loading progress -------------------------------------------------
+  // The Overpass fetch is a single server-side query with no streamable
+  // byte progress, so a true percentage isn't available. Instead we ease a
+  // simulated bar toward a 90% cap (fast at first, slowing as it climbs) to
+  // reassure users that the map is being built even when the request is slow,
+  // then snap to 100% and linger briefly once `loading` clears.
+  let progress = $state(0);
+  let overlayVisible = $state(false);
+
+  $effect(() => {
+    if (loading) {
+      overlayVisible = true;
+      progress = 0;
+      const start = performance.now();
+      let raf = requestAnimationFrame(function tick(now) {
+        const elapsed = (now - start) / 1000;
+        progress = 90 * (1 - Math.exp(-elapsed / 5));
+        raf = requestAnimationFrame(tick);
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+    if (overlayVisible) {
+      // Finishing: fill the bar, then hide the overlay after a short beat so
+      // the completed state is visible rather than vanishing mid-climb.
+      progress = 100;
+      const t = setTimeout(() => (overlayVisible = false), 450);
+      return () => clearTimeout(t);
+    }
+  });
+
   // Each map layer renders onto its own stacked <canvas>, in this paint order
   // (earlier = underneath). Keeping layers physically separate lets the print
   // action emit one page per layer without re-deriving any geometry.
@@ -121,7 +153,8 @@
     | "buildings"
     | "roads"
     | "rail"
-    | "labels";
+    | "labels"
+    | "origin";
 
   const LAYER_ORDER: LayerId[] = [
     "boundary",
@@ -132,6 +165,7 @@
     "roads",
     "rail",
     "labels",
+    "origin",
   ];
 
   const LAYER_LABELS: Record<LayerId, string> = {
@@ -143,7 +177,11 @@
     roads: "Roads",
     rail: "Rail",
     labels: "Labels",
+    origin: "Origin",
   };
+
+  // Colour of the searched-location origin marker (Svelte orange = rgb(255,62,0)).
+  const ORIGIN_COLOR = "#ff3e00";
 
   // Plain (non-reactive) ref map populated by `bind:this`; read inside the
   // repaint frame, after the DOM has settled.
@@ -217,6 +255,8 @@
     roads: { hw: string; path: Path2D }[];
     rail: Path2D;
     labels: PlacedLabel[];
+    // Screen-space position of the searched coordinate, or null if off-map.
+    origin: Pt | null;
   };
 
   // Projection-space geometry, baked once into Path2D objects (plus the label
@@ -394,6 +434,16 @@
       path: buildPath(feats),
     }));
 
+    // Project the searched coordinate through the same camera as everything
+    // else (lifted to ground level z=0 when tilted) so the marker pins to it.
+    let originPt: Pt | null = null;
+    if (origin) {
+      const p = proj(origin);
+      if (p && Number.isFinite(p[0]) && Number.isFinite(p[1])) {
+        originPt = tilted ? ob(p[0], p[1], 0) : [p[0], p[1]];
+      }
+    }
+
     let labels = showLabels ? layoutLabels(path) : [];
     if (tilted && labels.length) {
       // Keep labels pinned to their (now foreshortened) ground anchors; text
@@ -414,6 +464,7 @@
       roads,
       rail: buildPath(featuresByLayer.rail),
       labels,
+      origin: originPt,
     };
   });
 
@@ -437,6 +488,8 @@
         return featuresByLayer.rail.length > 0;
       case "labels":
         return s.labels.length > 0;
+      case "origin":
+        return !!s.origin;
     }
   }
 
@@ -650,7 +703,28 @@
       case "labels":
         if (s.labels.length > 0) drawLabels(ctx, s.labels, st.label);
         return;
+      case "origin":
+        if (s.origin) drawOrigin(ctx, s.origin);
+        return;
     }
+  }
+
+  // A target-style marker at the searched coordinate: a white-haloed ring with
+  // a solid centre dot, so it reads clearly over any layer beneath it.
+  function drawOrigin(ctx: CanvasRenderingContext2D, [x, y]: Pt) {
+    ctx.setLineDash([]);
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = ORIGIN_COLOR;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = ORIGIN_COLOR;
+    ctx.fill();
   }
 
   // Width of the slug/bleed margin (map-space px) drawn around every print page.
@@ -977,7 +1051,7 @@
     if (!win) return;
 
     const body = pages
-      .filter(pg => pg.label !== LAYER_LABELS.boundary)
+      .filter(pg => pg.label !== LAYER_LABELS.boundary && pg.label !== LAYER_LABELS.origin)
       .map(
         (p, i) =>
           `<section class="page">
@@ -1097,10 +1171,20 @@
     <div class="map-placeholder">Enter a location to draw the map.</div>
   {/if}
 
-  {#if loading}
+  {#if overlayVisible}
     <div class="loading-overlay" role="status" aria-live="polite">
       <div class="spinner" aria-hidden="true"></div>
-      <span class="loading-text">Loading map…</span>
+      <span class="loading-text">Drawing your map…</span>
+      <div
+        class="progress"
+        role="progressbar"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow={Math.round(progress)}
+      >
+        <div class="progress-bar" style:width="{progress}%"></div>
+      </div>
+      <span class="loading-hint">Fetching map data — this can take a moment.</span>
     </div>
   {/if}
 </div>
@@ -1183,6 +1267,27 @@
     color: #555;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+  }
+
+  .progress {
+    width: min(16rem, 60%);
+    height: 0.4rem;
+    border-radius: 999px;
+    background: rgba(255, 62, 0, 0.18);
+    overflow: hidden;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background: var(--color-theme-1);
+    border-radius: inherit;
+    transition: width 0.25s ease-out;
+  }
+
+  .loading-hint {
+    font-size: 0.75rem;
+    color: #777;
+    letter-spacing: 0.02em;
   }
 
 

@@ -49,6 +49,8 @@
   let appliedLabels = $state(false);
   let boundary = $state.raw<Feature<GeometryObject> | null>(null);
   let bbox = $state<Bbox | null>(null);
+  // Searched coordinate as [lon, lat] (GeoJSON order), marked on the map.
+  let origin = $state.raw<[number, number] | null>(null);
   let features = $state.raw<FeatureCollection<GeometryObject> | null>(null);
   let contours = $state.raw<ContourFeature[] | null>(null);
 
@@ -104,6 +106,7 @@
     displayName = null;
     boundary = null;
     bbox = null;
+    origin = null;
     features = null;
     contours = null;
 
@@ -119,6 +122,7 @@
       boundary = hit.boundary;
       appliedRadius = radiusMiles;
       bbox = bboxFromRadius(hit.lat, hit.lon, radiusMiles);
+      origin = [hit.lon, hit.lat];
 
       const selectedKeys = (Object.keys(selected) as LayerKey[]).filter(
         (k) => selected[k],
@@ -238,6 +242,7 @@
     bind:this={mapCanvas}
     {bbox}
     {boundary}
+    {origin}
     {features}
     {contours}
     {styles}
