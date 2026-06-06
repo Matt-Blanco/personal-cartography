@@ -8,14 +8,38 @@ export type LayerDef = {
 	matches: (props: Record<string, unknown>) => boolean;
 };
 
+// Water tag values feeding the "water" layer. Like the green sets below, these
+// are Sets (for `classify`) compiled into anchored Overpass regexes (for
+// fetching) so the query and classifier never drift apart.
+//
+// Water is tagged many ways in OSM, not just `natural=water`: large seas/lakes
+// are often mapped only by their `natural=coastline`; rivers/canals live under
+// `waterway=*`; reservoirs/basins under `landuse=*`; and most areas also carry
+// a `water=*` key. Covering all of these is what makes the layer actually work.
+const NATURAL_WATER = new Set(['water', 'bay', 'strait', 'coastline', 'spring']);
+const WATERWAY_WATER = new Set([
+	'riverbank',
+	'river',
+	'stream',
+	'canal',
+	'drain',
+	'ditch',
+	'dock'
+]);
+const LANDUSE_WATER = new Set(['reservoir', 'basin']);
+
+const NATURAL_WATER_RX = [...NATURAL_WATER].join('|');
+const WATERWAY_WATER_RX = [...WATERWAY_WATER].join('|');
+const LANDUSE_WATER_RX = [...LANDUSE_WATER].join('|');
+
 // Natural-environment tag values feeding the "green" layer. Kept as Sets (for
 // `classify`) and compiled into anchored Overpass regexes (for fetching) so the
 // two stay in lockstep — add a value once and both the query and classifier
 // pick it up.
 //
-// `natural=*`: vegetation, bare land/rock, water-margin surfaces, and linear
-// natural boundaries (coastline, cliff, ridge, tree_row). `water` is omitted —
-// the Water layer owns it.
+// `natural=*`: vegetation, bare land/rock, and water-margin land surfaces, plus
+// linear natural boundaries (cliff, ridge, tree_row). Water-side values
+// (water, coastline) are omitted — the Water layer, classified first, owns them.
 const NATURAL_GREEN = new Set([
 	'wood',
 	'scrub',
@@ -38,7 +62,6 @@ const NATURAL_GREEN = new Set([
 	'shrubbery',
 	'tree_row',
 	'hedge',
-	'coastline',
 	'cliff',
 	'ridge',
 	'valley'
@@ -83,9 +106,26 @@ export const LAYERS: LayerDef[] = [
 	{
 		key: 'water',
 		label: 'Water',
-		tagHint: 'natural=water',
-		selectors: ['way["natural"="water"]', 'relation["natural"="water"]'],
-		matches: (p) => p.natural === 'water'
+		tagHint: 'natural, water, waterway, landuse',
+		selectors: [
+			`way["natural"~"^(${NATURAL_WATER_RX})$"]`,
+			`relation["natural"~"^(${NATURAL_WATER_RX})$"]`,
+			'way["water"]',
+			'relation["water"]',
+			`way["waterway"~"^(${WATERWAY_WATER_RX})$"]`,
+			`relation["waterway"~"^(${WATERWAY_WATER_RX})$"]`,
+			`way["landuse"~"^(${LANDUSE_WATER_RX})$"]`,
+			`relation["landuse"~"^(${LANDUSE_WATER_RX})$"]`
+		],
+		matches: (p) => {
+			const natural = typeof p.natural === 'string' ? p.natural : undefined;
+			if (natural && NATURAL_WATER.has(natural)) return true;
+			if (typeof p.water === 'string') return true;
+			const waterway = typeof p.waterway === 'string' ? p.waterway : undefined;
+			if (waterway && WATERWAY_WATER.has(waterway)) return true;
+			const landuse = typeof p.landuse === 'string' ? p.landuse : undefined;
+			return !!landuse && LANDUSE_WATER.has(landuse);
+		}
 	},
 	{
 		key: 'green',
