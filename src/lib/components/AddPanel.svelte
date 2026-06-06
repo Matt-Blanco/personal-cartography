@@ -283,7 +283,7 @@
     </div>
   </fieldset>
 
-  <fieldset class="layers">
+  <!-- <fieldset class="layers">
     <legend>Icons</legend>
     <p class="hint">Drag an icon onto the map.</p>
     <div class="icon-grid">
@@ -300,7 +300,7 @@
         </button>
       {/each}
     </div>
-  </fieldset>
+  </fieldset> -->
 </div>
 
 <style>

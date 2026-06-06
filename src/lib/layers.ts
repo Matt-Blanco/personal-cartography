@@ -8,6 +8,63 @@ export type LayerDef = {
 	matches: (props: Record<string, unknown>) => boolean;
 };
 
+// Natural-environment tag values feeding the "green" layer. Kept as Sets (for
+// `classify`) and compiled into anchored Overpass regexes (for fetching) so the
+// two stay in lockstep — add a value once and both the query and classifier
+// pick it up.
+//
+// `natural=*`: vegetation, bare land/rock, water-margin surfaces, and linear
+// natural boundaries (coastline, cliff, ridge, tree_row). `water` is omitted —
+// the Water layer owns it.
+const NATURAL_GREEN = new Set([
+	'wood',
+	'scrub',
+	'heath',
+	'grassland',
+	'fell',
+	'tundra',
+	'moor',
+	'wetland',
+	'marsh',
+	'beach',
+	'sand',
+	'scree',
+	'shingle',
+	'bare_rock',
+	'rock',
+	'dune',
+	'glacier',
+	'mud',
+	'shrubbery',
+	'tree_row',
+	'hedge',
+	'coastline',
+	'cliff',
+	'ridge',
+	'valley'
+]);
+
+const LANDUSE_GREEN = new Set([
+	'forest',
+	'grass',
+	'recreation_ground',
+	'meadow',
+	'orchard',
+	'vineyard',
+	'allotments',
+	'village_green',
+	'greenfield',
+	'plant_nursery',
+	'flowerbed',
+	'farmland'
+]);
+
+const LEISURE_GREEN = new Set(['park', 'garden', 'nature_reserve', 'dog_park', 'common']);
+
+const NATURAL_GREEN_RX = [...NATURAL_GREEN].join('|');
+const LANDUSE_GREEN_RX = [...LANDUSE_GREEN].join('|');
+const LEISURE_GREEN_RX = [...LEISURE_GREEN].join('|');
+
 export const LAYERS: LayerDef[] = [
 	{
 		key: 'roads',
@@ -33,21 +90,28 @@ export const LAYERS: LayerDef[] = [
 	{
 		key: 'green',
 		label: 'Parks & green',
-		tagHint: 'leisure, landuse, natural',
+		tagHint: 'natural, leisure, landuse',
+		// Natural environment: vegetated/bare-land areas plus linear natural
+		// boundaries (coastline, cliff, tree rows, hedges). `natural=water` is
+		// intentionally excluded — it belongs to the Water layer, which is
+		// classified ahead of this one.
 		selectors: [
-			'way["leisure"~"park|garden|natural"]',
-			'way["landuse"~"forest|grass|recreation_ground|natural"]',
+			`way["natural"~"^(${NATURAL_GREEN_RX})$"]`,
+			`relation["natural"~"^(${NATURAL_GREEN_RX})$"]`,
+			`way["landuse"~"^(${LANDUSE_GREEN_RX})$"]`,
+			`relation["landuse"~"^(${LANDUSE_GREEN_RX})$"]`,
+			`way["leisure"~"^(${LEISURE_GREEN_RX})$"]`,
+			`relation["leisure"~"^(${LEISURE_GREEN_RX})$"]`,
+			'way["barrier"="hedge"]'
 		],
 		matches: (p) => {
-			const leisure = p.leisure as string | undefined;
-			const landuse = p.landuse as string | undefined;
-			return (
-				leisure === 'park' ||
-				leisure === 'garden' ||
-				landuse === 'forest' ||
-				landuse === 'grass' ||
-				landuse === 'recreation_ground'
-			);
+			const natural = typeof p.natural === 'string' ? p.natural : undefined;
+			if (natural && natural !== 'water' && NATURAL_GREEN.has(natural)) return true;
+			const landuse = typeof p.landuse === 'string' ? p.landuse : undefined;
+			if (landuse && LANDUSE_GREEN.has(landuse)) return true;
+			const leisure = typeof p.leisure === 'string' ? p.leisure : undefined;
+			if (leisure && LEISURE_GREEN.has(leisure)) return true;
+			return p.barrier === 'hedge';
 		}
 	},
 	{

@@ -233,7 +233,7 @@
         onclick={() => (activeTab = "add")}
         title={hasMap ? undefined : "Generate a map first"}
       >
-        Add
+        Distort
       </button>
     </nav>
   </aside>
