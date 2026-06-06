@@ -180,9 +180,6 @@
     origin: "Origin",
   };
 
-  // Colour of the searched-location origin marker (Svelte orange = rgb(255,62,0)).
-  const ORIGIN_COLOR = "#ff3e00";
-
   // Plain (non-reactive) ref map populated by `bind:this`; read inside the
   // repaint frame, after the DOM has settled.
   const layerCanvases: Partial<Record<LayerId, HTMLCanvasElement | null>> = {};
@@ -704,26 +701,31 @@
         if (s.labels.length > 0) drawLabels(ctx, s.labels, st.label);
         return;
       case "origin":
-        if (s.origin) drawOrigin(ctx, s.origin);
+        if (s.origin) drawOrigin(ctx, s.origin, st.origin);
         return;
     }
   }
 
-  // A target-style marker at the searched coordinate: a white-haloed ring with
-  // a solid centre dot, so it reads clearly over any layer beneath it.
-  function drawOrigin(ctx: CanvasRenderingContext2D, [x, y]: Pt) {
+  // A target-style marker at the searched coordinate: a haloed ring with a
+  // solid centre dot, so it reads clearly over any layer beneath it.
+  function drawOrigin(
+    ctx: CanvasRenderingContext2D,
+    [x, y]: Pt,
+    style: MapStyles["origin"],
+  ) {
+    const r = style.size;
     ctx.setLineDash([]);
     ctx.lineJoin = "round";
     ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = style.halo;
     ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = ORIGIN_COLOR;
+    ctx.lineWidth = Math.max(1, r * 0.4);
+    ctx.strokeStyle = style.color;
     ctx.stroke();
     ctx.beginPath();
-    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = ORIGIN_COLOR;
+    ctx.arc(x, y, r * 0.5, 0, Math.PI * 2);
+    ctx.fillStyle = style.color;
     ctx.fill();
   }
 
@@ -800,6 +802,9 @@
 
     const pages: { label: string; url: string, location: string }[] = [];
     for (const lid of layers) {
+      // The origin isn't its own page — it's overlaid on every layer below as a
+      // shared reference point, so each printout carries the searched location.
+      if (lid === "origin") continue;
       const c = document.createElement("canvas");
       c.width = Math.round((mapWidth + margin * 2) * scale);
       c.height = Math.round((mapHeight + margin * 2) * scale);
@@ -812,6 +817,9 @@
       ctx.save();
       applySkew(ctx, skewX, skewY, mapWidth, mapHeight);
       drawLayer(lid, ctx, s, st, scale);
+      // Stamp the origin marker on top of the layer, within the same skew so it
+      // lands on the searched coordinate exactly as on screen.
+      if (s.origin) drawOrigin(ctx, s.origin, st.origin);
       ctx.restore();
       drawPrintMarks(ctx, mapWidth, mapHeight, margin);
       pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png"), location: displayName ?? "" });
@@ -1051,7 +1059,7 @@
     if (!win) return;
 
     const body = pages
-      .filter(pg => pg.label !== LAYER_LABELS.boundary && pg.label !== LAYER_LABELS.origin)
+      .filter(pg => pg.label !== LAYER_LABELS.boundary)
       .map(
         (p, i) =>
           `<section class="page">

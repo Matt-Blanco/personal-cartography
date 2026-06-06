@@ -78,6 +78,9 @@ export type MapStyles = {
   rail: string;
   contour: string;
   label: { fill: string; halo: string };
+  // The searched-location marker: `color` fills the ring + centre dot, `halo`
+  // is the contrasting outline, `size` is the outer radius in map-space px.
+  origin: { color: string; halo: string; size: number };
   // CSS font-family stacks. `title` styles the printed address + layer-name
   // headings; `label` styles the on-map road & feature names.
   fonts: { title: string; label: string };
@@ -98,6 +101,7 @@ export const DEFAULT_STYLES: MapStyles = {
   rail: "#555555",
   contour: "#a07e54",
   label: { fill: "#333333", halo: "#ffffff" },
+  origin: { color: "#ff3e00", halo: "#ffffff", size: 5 },
   fonts: {
     title: "system-ui, sans-serif",
     label: '"Fira Mono", ui-monospace, monospace',

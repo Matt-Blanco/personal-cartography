@@ -241,6 +241,22 @@
       </label>
     </fieldset>
   {/if}
+
+  <fieldset class="layers">
+    <legend>Origin</legend>
+    <label class="color-row">
+      <span class="color-name">Color</span>
+      <input type="color" bind:value={styles.origin.color} />
+    </label>
+    <label class="color-row">
+      <span class="color-name">Halo</span>
+      <input type="color" bind:value={styles.origin.halo} />
+    </label>
+    <label class="color-row">
+      <span class="color-name">Size</span>
+      <input type="range" min="2" max="14" step="0.5" bind:value={styles.origin.size} />
+    </label>
+  </fieldset>
 </div>
 
 <style>
