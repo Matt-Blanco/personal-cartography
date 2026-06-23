@@ -31,7 +31,7 @@
     loading,
     mapWidth = $bindable(),
     mapHeight = $bindable(),
-    displayName
+    displayName,
   }: {
     bbox: Bbox | null;
     boundary: Feature<GeometryObject> | null;
@@ -158,12 +158,12 @@
 
   const LAYER_ORDER: LayerId[] = [
     "boundary",
-    "contours",
     "green",
     "water",
     "buildings",
     "roads",
     "rail",
+    "contours",
     "labels",
     "origin",
   ];
@@ -190,7 +190,9 @@
     if (!fitFeature || mapWidth <= 0 || mapHeight <= 0) return null;
     // Apply the rotation before fitting so the rotated extent is sized to fill
     // the canvas (rather than rotating a pre-fit map and clipping its corners).
-    return geoMercator().angle(rotation).fitSize([mapWidth, mapHeight], fitFeature);
+    return geoMercator()
+      .angle(rotation)
+      .fitSize([mapWidth, mapHeight], fitFeature);
   });
 
   // Vertical exaggeration so terrain/building depth reads at map scales.
@@ -240,11 +242,17 @@
   // far→near so painting them in order gives plausible occlusion.
   type BuildingPrism = { walls: Path2D; roof: Path2D };
 
+  // Fill layers that can hold both areas and linear features. Rivers, streams,
+  // canals and coastlines are mapped as LineStrings, not closed polygons, so
+  // they're kept in a separate `line` path that is stroked only — filling them
+  // would implicitly close the open path and flood the canvas with colour.
+  type AreaLine = { area: Path2D; line: Path2D };
+
   type Scene = {
     boundary: Path2D | null;
     contours: Path2D | null;
-    green: Path2D;
-    water: Path2D;
+    green: AreaLine;
+    water: AreaLine;
     buildings: Path2D;
     // When tilted (>0), buildings render as extruded prisms instead of flat
     // footprints; null means draw the flat `buildings` footprint path.
@@ -336,10 +344,21 @@
     const buildPath = (feats: Feature<GeometryObject>[]) =>
       tilted ? obliquePath(feats, () => 0) : flatPath(feats);
 
+    // Split a fill layer into a polygon path (filled) and a line path (stroked
+    // only) so linear water/green features aren't filled as closed shapes.
+    const buildAreaLine = (feats: Feature<GeometryObject>[]): AreaLine => {
+      const polys: Feature<GeometryObject>[] = [];
+      const lines: Feature<GeometryObject>[] = [];
+      for (const f of feats) {
+        const t = f.geometry.type;
+        if (t === "Polygon" || t === "MultiPolygon") polys.push(f);
+        else if (t === "LineString" || t === "MultiLineString") lines.push(f);
+      }
+      return { area: buildPath(polys), line: buildPath(lines) };
+    };
+
     // Extrude buildings into wall + roof prisms, sorted far→near.
-    const buildPrisms = (
-      feats: Feature<GeometryObject>[],
-    ): BuildingPrism[] => {
+    const buildPrisms = (feats: Feature<GeometryObject>[]): BuildingPrism[] => {
       const ringsOf = (f: Feature<GeometryObject>): Pt[][] => {
         const g = f.geometry;
         const out: Pt[][] = [];
@@ -454,8 +473,8 @@
     return {
       boundary: boundaryPath,
       contours: contoursPath,
-      green: buildPath(featuresByLayer.green),
-      water: buildPath(featuresByLayer.water),
+      green: buildAreaLine(featuresByLayer.green),
+      water: buildAreaLine(featuresByLayer.water),
       buildings: tilted ? new Path2D() : flatPath(featuresByLayer.buildings),
       prisms: tilted ? buildPrisms(featuresByLayer.buildings) : null,
       roads,
@@ -536,7 +555,14 @@
     const cx = w / 2;
     const cy = h / 2;
     ctx.translate(cx, cy);
-    ctx.transform(1, Math.tan((sy * Math.PI) / 180), Math.tan((sx * Math.PI) / 180), 1, 0, 0);
+    ctx.transform(
+      1,
+      Math.tan((sy * Math.PI) / 180),
+      Math.tan((sx * Math.PI) / 180),
+      1,
+      0,
+      0,
+    );
     ctx.translate(-cx, -cy);
   }
 
@@ -635,7 +661,6 @@
     st: MapStyles,
     dpr: number,
     address?: string | null,
-
   ) {
     switch (id) {
       case "boundary":
@@ -653,12 +678,19 @@
         ctx.stroke(s.contours);
         return;
       case "green":
-      case "water":
+      case "water": {
         ctx.lineJoin = "round";
-        ctx.lineCap = "butt";
+        ctx.lineCap = "round";
         ctx.setLineDash([]);
-        fillStroke(ctx, s[id], st[id], dpr);
+        const al = s[id];
+        fillStroke(ctx, al.area, st[id], dpr);
+        // Linear features (rivers, streams, canals, coastlines, tree rows) are
+        // stroked, never filled, so they read as lines rather than wedges.
+        ctx.strokeStyle = st[id].stroke;
+        ctx.lineWidth = st[id].lineWidth;
+        ctx.stroke(al.line);
         return;
+      }
       case "buildings":
         ctx.lineJoin = "round";
         ctx.lineCap = "butt";
@@ -800,7 +832,7 @@
     const scale = Math.max(2, Math.ceil((window.devicePixelRatio || 1) * 2));
     const margin = PRINT_MARGIN;
 
-    const pages: { label: string; url: string, location: string }[] = [];
+    const pages: { label: string; url: string; location: string }[] = [];
     for (const lid of layers) {
       // The origin isn't its own page — it's overlaid on every layer below as a
       // shared reference point, so each printout carries the searched location.
@@ -822,7 +854,11 @@
       if (s.origin) drawOrigin(ctx, s.origin, st.origin);
       ctx.restore();
       drawPrintMarks(ctx, mapWidth, mapHeight, margin);
-      pages.push({ label: LAYER_LABELS[lid], url: c.toDataURL("image/png"), location: displayName ?? "" });
+      pages.push({
+        label: LAYER_LABELS[lid],
+        url: c.toDataURL("image/png"),
+        location: displayName ?? "",
+      });
     }
     openPrintWindow(pages);
   }
@@ -1053,13 +1089,15 @@
     }
   }
 
-  function openPrintWindow(pages: { label: string; url: string, location: string }[]) {
+  function openPrintWindow(
+    pages: { label: string; url: string; location: string }[],
+  ) {
     if (pages.length === 0) return;
     const win = window.open("", "_blank");
     if (!win) return;
 
     const body = pages
-      .filter(pg => pg.label !== LAYER_LABELS.boundary)
+      .filter((pg) => pg.label !== LAYER_LABELS.boundary)
       .map(
         (p, i) =>
           `<section class="page">
@@ -1192,7 +1230,9 @@
       >
         <div class="progress-bar" style:width="{progress}%"></div>
       </div>
-      <span class="loading-hint">Fetching map data — this can take a moment.</span>
+      <span class="loading-hint"
+        >Fetching map data — this can take a moment.</span
+      >
     </div>
   {/if}
 </div>
@@ -1297,7 +1337,6 @@
     color: #777;
     letter-spacing: 0.02em;
   }
-
 
   .print-btn {
     padding: 0.6rem 1rem;
